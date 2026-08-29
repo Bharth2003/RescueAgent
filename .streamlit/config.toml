@@ -1,10 +1,47 @@
 [theme]
 base = "dark"
+
 primaryColor = "#FF7A2F"
 backgroundColor = "#0E1013"
 secondaryBackgroundColor = "#171A20"
 textColor = "#E9EBEE"
-font = "sans serif"
+borderColor = "#2A303A"
+linkColor = "#FF9457"
+linkUnderline = false
+
+codeBackgroundColor = "#12151A"
+codeTextColor = "#D6DCE5"
+dataframeBorderColor = "#2A303A"
+dataframeHeaderBackgroundColor = "#171A20"
+
+greenColor = "#34D399"
+redColor = "#F87171"
+orangeColor = "#FB923C"
+yellowColor = "#FBBF24"
+violetColor = "#A78BFA"
+blueColor = "#60A5FA"
+grayColor = "#9BA3AE"
+
+# Larger type throughout - this app is demoed on a projector and read at a distance.
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&display=swap"
+baseFontSize = 18
+baseFontWeight = 400
+headingFontSizes = ["44px", "32px", "25px", "21px", "19px", "17px"]
+headingFontWeights = [800, 700, 700, 600, 600, 600]
+metricValueFontSize = "44px"
+metricValueFontWeight = 700
+codeFontSize = "15px"
+
+baseRadius = "12px"
+buttonRadius = "12px"
+showWidgetBorder = true
+showSidebarBorder = true
+
+[theme.sidebar]
+backgroundColor = "#12151A"
+secondaryBackgroundColor = "#1B1F26"
+borderColor = "#2A303A"
 
 [server]
 runOnSave = true

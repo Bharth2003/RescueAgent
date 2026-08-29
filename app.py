@@ -1,10 +1,12 @@
 """
 RescueAgent — Edinburgh Food Rescue
 ===================================
-Streamlit dashboard with real-time driver tracking, built entirely from
-native Streamlit components (st.navigation, st.metric, st.badge,
-st.chat_message, st.container) — no injected HTML/CSS for layout or chrome.
-Theming (dark, brand orange) lives in .streamlit/config.toml.
+Streamlit dashboard with Uber-style live driver tracking.
+
+Built from native Streamlit components; the only custom code is the tracking
+map (see live_map.py), which exists because st_folium re-rendered the whole map
+on every rerun and made it blink. Type scale, colours and radii live in
+.streamlit/config.toml — there is no CSS injected here.
 
 Run:  streamlit run app.py
 """
@@ -14,15 +16,13 @@ import os
 import time
 from datetime import datetime
 
-import folium
 import streamlit as st
-from folium.features import DivIcon
-from streamlit_folium import st_folium
 
 from strands import Agent
 from strands.models import BedrockModel
 
-from routing import get_route, haversine_km, point_at
+from live_map import live_map
+from routing import get_route, haversine_km
 from tools import (accept_rescue, analyze_food_safety, broadcast_rescue,
                    dispatch_driver, estimate_weight_kg, find_eligible_shelter,
                    release_driver, route_lookup)
@@ -33,20 +33,23 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 BEDROCK_MODEL_ID = "qwen.qwen3-235b-a22b-2507-v1:0"
 BEDROCK_REGION = "eu-west-2"
 
-# demo clock — full journey plays in ~1 min 30 s (slow enough to read on a projector)
+# demo clock — the whole journey plays in about 90 s, slow enough to narrate
 LEG1_SECONDS = 30.0     # driver -> restaurant
 LEG2_SECONDS = 40.0     # restaurant -> shelter
 OFFER_SECONDS = 8.0     # auto-accept if nobody taps Accept
 PICKUP_SECONDS = 9.0    # auto-handover if nobody taps the button
 
-VEH = {"van": "VAN", "car": "CAR", "motorbike": "MOTO", "e-bike": "E-BIKE",
-       "bicycle": "BIKE", "scooter": "SCOOTER"}
-STAGES = ["Assigned", "En route to pickup", "At restaurant", "Delivering", "Delivered"]
+BRAND = "#FF7A2F"
+VEH = {"van": "Van", "car": "Car", "motorbike": "Motorbike", "e-bike": "E-bike",
+       "bicycle": "Bicycle", "scooter": "Scooter"}
+VEH_ICON = {"van": ":material/local_shipping:", "car": ":material/directions_car:",
+            "motorbike": ":material/two_wheeler:", "e-bike": ":material/electric_bike:",
+            "bicycle": ":material/pedal_bike:", "scooter": ":material/moped:"}
+STAGES = ["Assigned", "To pickup", "At kitchen", "Delivering", "Delivered"]
+PHASE_STAGE = {"idle": -1, "broadcast": 0, "to_pickup": 1, "at_pickup": 2,
+               "to_shelter": 3, "delivered": 4}
 
-# hex colors used only for the folium map (leaflet needs real colors)
-MAP_BRAND, MAP_GREEN, MAP_VIOLET, MAP_INK = "#FF7A2F", "#34D399", "#A78BFA", "#0E1013"
-
-# accent key -> (st.badge color, toast icon, st alert function)
+# accent -> (badge colour, toast icon, alert renderer)
 ACCENTS = {
     "brand": {"badge": "primary", "toast": "🛵", "alert": st.info},
     "green": {"badge": "green", "toast": "✅", "alert": st.success},
@@ -54,6 +57,8 @@ ACCENTS = {
     "red": {"badge": "red", "toast": "⚠️", "alert": st.error},
     "violet": {"badge": "violet", "toast": "🏠", "alert": st.info},
 }
+ROLE_AVATAR = {"manager": "🧑‍🍳", "agent": "🤖", "tool": "🛠️",
+               "driver": "🛵", "shelter": "🏠", "system": "⚡"}
 
 SYSTEM_PROMPT = """\
 You are RescueAgent, an AI that coordinates food rescue in Edinburgh.
@@ -136,7 +141,7 @@ def get_agent():
 def init_state():
     defaults = {
         "delivery": None,          # active delivery dict
-        "steps": [],               # agent reasoning trace
+        "steps": [],               # agent narration
         "notifs": [],              # alert feed
         "toast_cursor": 0,         # notifications already toasted
         "history": [],
@@ -158,8 +163,13 @@ def now_str():
     return datetime.now().strftime("%H:%M:%S")
 
 
-def step(kind, title, body="", accent="brand"):
-    st.session_state.steps.append({"kind": kind, "title": title, "body": body,
+def say(role, text, meta="", accent="brand"):
+    """Add one line of plain-English narration to the agent trace.
+
+    `text` is what a person would say happened; `meta` is the supporting
+    machine detail (tool name, coordinates, thresholds) shown underneath.
+    """
+    st.session_state.steps.append({"role": role, "text": text, "meta": meta,
                                    "accent": accent, "t": now_str()})
 
 
@@ -172,11 +182,16 @@ def flush_toasts():
     """Toast anything added since the last run."""
     pending = st.session_state.notifs[:max(0, len(st.session_state.notifs) - st.session_state.toast_cursor)]
     for n in reversed(pending):
-        st.toast(f"**{n['title']}**  \n{n['body']}", icon=ACCENTS.get(n["accent"], ACCENTS["brand"])["toast"])
+        st.toast(f"**{n['title']}**  \n{n['body']}",
+                 icon=ACCENTS.get(n["accent"], ACCENTS["brand"])["toast"])
     st.session_state.toast_cursor = len(st.session_state.notifs)
 
 
-# ---------------------------------------------------------------- flow (business logic — unchanged)
+def initials(name):
+    return "".join(part[0] for part in name.split()[:2]).upper()
+
+
+# ---------------------------------------------------------------- flow
 def launch_rescue():
     r = st.session_state.restaurant
     text = st.session_state.food_text.strip()
@@ -189,39 +204,53 @@ def launch_rescue():
 
     st.session_state.steps = []
     st.session_state.agent_reply = ""
-    step("user → agent", "Rescue request received", f'"{text}"\nfrom {r["name"]}', "brand")
+    say("manager", f'The kitchen at **{r["name"]}** reported surplus: “{text}”',
+        f'{r["address"]} · {r["lat"]:.5f}, {r["lng"]:.5f}', "brand")
 
     safety = json.loads(analyze_food_safety(text))
-    step("tool · analyze_food_safety", "Food classified",
-         f'temperature: {"hot" if safety["needs_hot"] else "cold"}\n'
-         f'category: {safety["category"]}\n'
-         f'weight_kg: {safety["weight_kg"]}\n'
-         f'fsa_window_min: {safety["fsa_window_minutes"]}', "amber")
+    kind = "hot cooked food" if safety["needs_hot"] else "chilled or ambient food"
+    carry = ("It has to travel in a thermal bag."
+             if safety["needs_hot"] else "A cool box is preferred but not required.")
+    say("agent",
+        f'I read that as **{kind}**, roughly **{safety["weight_kg"]} kg**, '
+        f'category *{safety["category"]}*. Food standards give me '
+        f'**{safety["fsa_window_minutes"]} minutes** from handover to serving. {carry}',
+        f'analyze_food_safety · needs_hot={safety["needs_hot"]} '
+        f'needs_meat={safety["needs_meat"]} window={safety["fsa_window_minutes"]}min', "amber")
 
     shelter = json.loads(find_eligible_shelter(
         safety["needs_hot"], safety["needs_meat"], safety["needs_drinks"],
         r["lat"], r["lng"]))
     if shelter.get("error"):
-        step("tool · find_eligible_shelter", "No eligible shelter", shelter["error"], "red")
+        say("agent", f'I could not place this load. {shelter["error"]}',
+            "find_eligible_shelter returned no match", "red")
         notify("Match failed", shelter["error"], "system", "red")
         return
+
     free = shelter["capacity_meals"] - shelter["current_intake_meals"]
-    step("tool · find_eligible_shelter", "Shelter matched",
-         f'{shelter["id"]} — {shelter["name"]}\n'
-         f'accepts_hot: {shelter["accepts_hot_food"]} · accepts_meat: {shelter["accepts_meat"]}\n'
-         f'demand {shelter["demand_score"]}/5 · {free} meals of headroom', "violet")
+    km_to_shelter = haversine_km((r["lat"], r["lng"]), (shelter["lat"], shelter["lng"]))
+    say("shelter",
+        f'**{shelter["name"]}** is the right home for it — they accept this food type, '
+        f'they are running at **{shelter["demand_score"]}/5 demand**, and they still have '
+        f'**{free} meals** of headroom. They are {km_to_shelter:.1f} km from the kitchen.',
+        f'find_eligible_shelter · {shelter["id"]} · {shelter["address"]}', "violet")
 
     bc = json.loads(broadcast_rescue(shelter["id"], safety["needs_hot"], safety["needs_meat"],
                                      safety["weight_kg"], r["lat"], r["lng"], 3))
     if bc.get("error"):
-        step("tool · broadcast_rescue", "No capable driver on shift", bc["error"], "red")
+        say("agent", f'Nobody on shift can take this right now. {bc["error"]}',
+            "broadcast_rescue found no capable driver", "red")
         notify("Dispatch failed", bc["error"], "system", "red")
         return
 
     offers = [{**o, "status": "pending"} for o in bc["offered"]]
-    step("tool · broadcast_rescue", f'Broadcast to {len(offers)} nearest capable drivers',
-         "\n".join(f'{o["name"]:<18}{VEH.get(o["vehicle_type"], ""):<8}'
-                   f'{o["distance_km"]:.1f} km · {o["max_capacity_kg"]} kg' for o in offers), "green")
+    roster = ", ".join(f'{o["name"]} ({o["distance_km"]:.1f} km, '
+                       f'{(VEH.get(o["vehicle_type"]) or "vehicle").lower()})' for o in offers)
+    say("agent",
+        f'I offered the job to the **{len(offers)} nearest capable drivers** — {roster}. '
+        f'Whoever accepts first takes it; the rest are released automatically.',
+        f'broadcast_rescue · filtered on capacity ≥ {safety["weight_kg"]} kg'
+        + (", thermal bag required" if safety["needs_hot"] else ""), "green")
 
     st.session_state.delivery = {
         "restaurant": r, "shelter": shelter, "safety": safety, "food_text": text,
@@ -239,10 +268,12 @@ def launch_rescue():
                     f'Surplus food at {r["name"]} ({r["address"]}), '
                     f'coordinates {r["lat"]}, {r["lng"]}. The manager says: "{text}"'))
             st.session_state.agent_reply = reply
-            step("agent → user", "Summary", reply.strip()[:900], "brand")
+            say("agent", reply.strip()[:900], f"{BEDROCK_MODEL_ID} · {BEDROCK_REGION}", "brand")
         except Exception as e:
-            step("agent → user", "Bedrock unavailable",
-                 f"{e}\nfalling back to the deterministic tool pipeline", "red")
+            say("system",
+                "Bedrock is unreachable, so I am running the deterministic tool "
+                "pipeline instead — the rescue itself is unaffected.",
+                str(e)[:200], "red")
 
 
 def do_accept(driver_id):
@@ -261,21 +292,27 @@ def do_accept(driver_id):
         o["status"] = "won" if o["driver_id"] == driver_id else "lost"
     d["winner"] = won
 
-    step("driver → agent", "Offer accepted",
-         f'{won["name"]} accepted\nother {len(d["offers"]) - 1} offers withdrawn', "green")
-    notify("Driver assigned",
-           f'{won["name"]} accepted and is heading to {d["restaurant"]["name"]}.',
-           "manager", "green")
-
     r, s = d["restaurant"], d["shelter"]
     leg1 = get_route((won["current_lat"], won["current_lng"]), (r["lat"], r["lng"]), won["vehicle_type"])
     leg2 = get_route((r["lat"], r["lng"]), (s["lat"], s["lng"]), won["vehicle_type"])
     d["legs"] = [leg1, leg2]
     st.session_state.route_source = leg1["source"]
-    step("tool · route_lookup", "Road route resolved",
-         f'leg 1 pickup: {leg1["km"]:.1f} km · ~{leg1["minutes"]} min\n'
-         f'leg 2 delivery: {leg2["km"]:.1f} km · ~{leg2["minutes"]} min\n'
-         f'source: {leg1["source"]}', "brand")
+
+    bag = " and is carrying a thermal bag" if won.get("has_thermal_bag") else ""
+    ride = (VEH.get(won["vehicle_type"]) or "vehicle").lower()
+    say("driver",
+        f'**{won["name"]}** accepted the job first — {won["distance_km"]:.1f} km away in '
+        f'{won["neighbourhood"]}, on a {ride}{bag}. '
+        f'The other {len(d["offers"]) - 1} offers were withdrawn.',
+        f'accept_rescue · {won["driver_id"]} · rated {won["rating"]}★ · '
+        f'capacity {won["max_capacity_kg"]} kg', "green")
+    say("agent",
+        f'Route locked: **{leg1["km"]:.1f} km** to {r["name"]} (about {leg1["minutes"]} min), '
+        f'then **{leg2["km"]:.1f} km** on to {s["name"]} (about {leg2["minutes"]} min). '
+        f'Tracking is live below.',
+        f'route_lookup · geometry from {leg1["source"]}', "brand")
+    notify("Driver assigned",
+           f'{won["name"]} accepted and is heading to {r["name"]}.', "manager", "green")
 
     d["phase"] = "to_pickup"
     d["leg"] = 0
@@ -286,10 +323,12 @@ def do_arrive():
     d = st.session_state.delivery
     d["phase"] = "at_pickup"
     d["t0"] = time.time()
-    step("event · driver_arrived", "Driver at pickup point",
-         f'{d["winner"]["name"]} arrived at {d["restaurant"]["name"]}\n'
-         f'awaiting handover confirmation', "green")
-    notify(f'{d["winner"]["name"]} has arrived',
+    w = d["winner"]
+    say("driver",
+        f'**{w["name"]} has arrived at {d["restaurant"]["name"]}** and is waiting at the '
+        f'door for the handover.',
+        f'leg 1 complete · {d["legs"][0]["km"]:.1f} km driven', "green")
+    notify(f'{w["name"]} has arrived',
            f'Waiting at {d["restaurant"]["name"]} — hand over the food and confirm.',
            "manager", "brand")
 
@@ -301,12 +340,16 @@ def do_handover():
     d["phase"] = "to_shelter"
     d["leg"] = 1
     d["t0"] = time.time()
-    bag = " into thermal bag" if d["winner"].get("has_thermal_bag") else ""
-    step("event · food_collected", "Handover confirmed",
-         f'{d["safety"]["weight_kg"]} kg loaded{bag}\n'
-         f'FSA window: {d["safety"]["fsa_window_minutes"]} min', "amber")
-    notify("Food collected", f'{d["winner"]["name"]} is en route to {d["shelter"]["name"]}.',
-           "driver", "green")
+    w, sf, s = d["winner"], d["safety"], d["shelter"]
+    where = ("into a thermal bag" if w.get("has_thermal_bag")
+             else ("into a cool box" if w.get("has_cool_box") else "into the carrier"))
+    say("driver",
+        f'Handover confirmed — **{w["name"]} loaded {sf["weight_kg"]} kg** {where} '
+        f'and is now driving to **{s["name"]}**, {d["legs"][1]["km"]:.1f} km away. '
+        f'The food has to be served within {sf["fsa_window_minutes"]} minutes.',
+        f'FSA clock started at {now_str()} · {sf["category"]}', "amber")
+    notify("Food collected",
+           f'{w["name"]} is en route to {s["name"]}.', "driver", "green")
 
 
 def do_deliver():
@@ -328,16 +371,20 @@ def do_deliver():
                    f'{sf["weight_kg"]} kg · {total_km:.1f} km total',
         "meals": meals, "co2": f"{co2} kg", "shelter": s["name"],
     })
-    step("event · delivered", "Delivery complete",
-         f'{meals} meals logged at {s["name"]}\n{co2} kg CO₂e avoided', "green")
-    notify("Delivered", f'{s["name"]} signed for {meals} meals. {w["name"]} is back on shift.',
+    say("shelter",
+        f'**Delivered.** {s["name"]} signed for {sf["weight_kg"]} kg — about **{meals} meals** '
+        f'— and {w["name"]} is back on the available roster. That is **{co2} kg of CO₂e** '
+        f'kept out of the air, over {total_km:.1f} km of driving.',
+        f'release_driver · {w["driver_id"]} · rescue logged', "green")
+    notify("Delivered",
+           f'{s["name"]} signed for {meals} meals. {w["name"]} is back on shift.',
            "manager", "green")
     d["phase"] = "delivered"
     load.clear()
 
 
 def advance():
-    """Move the state machine on according to the wall clock."""
+    """Drive the state machine off the wall clock. Returns leg progress 0..1."""
     d = st.session_state.delivery
     if not d:
         return 0.0
@@ -368,7 +415,7 @@ def advance():
 
 def reset_demo():
     d = st.session_state.delivery
-    if d and d.get("winner") and d["phase"] not in ("delivered",):
+    if d and d.get("winner") and d["phase"] != "delivered":
         release_driver(d["winner"]["driver_id"])
     st.session_state.delivery = None
     st.session_state.steps = []
@@ -376,121 +423,88 @@ def reset_demo():
     load.clear()
 
 
-# ---------------------------------------------------------------- map
-def build_map(progress):
+# ---------------------------------------------------------------- map plan
+def map_plan():
+    """Everything the tracking map needs to animate the journey unaided."""
     d = st.session_state.delivery
-    m = folium.Map(location=[55.9490, -3.1900], zoom_start=12,
-                   tiles="OpenStreetMap", control_scale=True,
-                   zoom_control=True, attr=None)
+    fleet = [[dr["current_lat"], dr["current_lng"], dr.get("status") == "available"]
+             for dr in DRV if dr.get("current_lat") is not None]
 
-    winner_id = d["winner"]["driver_id"] if d and d.get("winner") else None
-    dim = bool(d)
-    for dr in drivers_live():
-        if dr.get("current_lat") is None or dr["id"] == winner_id:
-            continue
-        on = dr.get("status") == "available"
-        colour = MAP_GREEN if on else "#B9AE9C"
-        folium.CircleMarker(
-            [dr["current_lat"], dr["current_lng"]], radius=5 if on else 4,
-            color=MAP_INK, weight=1.5, fill=True, fill_color=colour,
-            fill_opacity=0.5 if dim else 1.0,
-            tooltip=f'{dr["name"]} · {VEH.get(dr["vehicle_type"], "")} · {dr["status"].replace("_", " ")}',
-        ).add_to(m)
+    base = {"brand": BRAND, "fleet": fleet, "route": [], "done_route": [],
+            "pickup": None, "shelter": None, "hold": None, "t0": 0, "dur": 0,
+            "eta_min": 0, "legend": [["Driver on shift", "#34D399"],
+                                     ["Busy or off duty", "#7D8794"]]}
 
     if not d:
-        return m
+        return {**base, "phase": "idle", "label": "Fleet standby",
+                "value": str(len(AVAIL)),
+                "sub": f"{len(DRV)} volunteer drivers across Edinburgh"}
 
-    r, s = d["restaurant"], d["shelter"]
-    if d["legs"]:
-        folium.PolyLine(d["legs"][0]["coords"], color="#8A8072", weight=4,
-                        opacity=0.7, dash_array="7,8").add_to(m)
-        folium.PolyLine(d["legs"][1]["coords"], color=MAP_BRAND, weight=5, opacity=0.95).add_to(m)
+    r, s, ph = d["restaurant"], d["shelter"], d["phase"]
+    pins = {"pickup": {"lat": r["lat"], "lng": r["lng"], "name": r["name"]},
+            "shelter": {"lat": s["lat"], "lng": s["lng"], "name": s["name"]}}
+    legend = [["Pickup kitchen", BRAND], ["Shelter", "#A78BFA"]]
 
-    def square(latlng, colour, label, tip):
-        folium.Marker(
-            latlng, tooltip=tip,
-            icon=DivIcon(icon_size=(34, 34), icon_anchor=(17, 17), html=(
-                f'<div style="width:32px;height:32px;border-radius:7px;background:{colour};'
-                f'border:2px solid {MAP_INK};box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;'
-                f'place-items:center;font:700 10px/1 sans-serif;color:{MAP_INK}">{label}</div>')),
-        ).add_to(m)
+    if ph == "broadcast":
+        return {**base, **pins, "phase": ph, "legend": legend,
+                "label": "Dispatching", "value": str(len(d["offers"])),
+                "sub": "offers open — waiting for a driver to accept"}
 
-    square([r["lat"], r["lng"]], MAP_BRAND, "P", r["name"])
-    square([s["lat"], s["lng"]], MAP_VIOLET, "S", s["name"])
+    leg1, leg2 = d["legs"][0], d["legs"][1]
+    l1 = [[a, b] for a, b in leg1["coords"]]
+    l2 = [[a, b] for a, b in leg2["coords"]]
 
-    w = d.get("winner")
-    if w:
-        if d["phase"] == "to_pickup" and d["legs"]:
-            pos = point_at(d["legs"][0]["coords"], progress)
-        elif d["phase"] == "at_pickup":
-            pos = (r["lat"], r["lng"])
-        elif d["phase"] == "to_shelter" and d["legs"]:
-            pos = point_at(d["legs"][1]["coords"], progress)
-        elif d["phase"] == "delivered":
-            pos = (s["lat"], s["lng"])
-        else:
-            pos = (w["current_lat"], w["current_lng"])
-        folium.Marker(
-            list(pos), tooltip=f'{w["name"]} · {VEH.get(w["vehicle_type"], "")}',
-            icon=DivIcon(icon_size=(40, 40), icon_anchor=(20, 20), html=(
-                f'<div style="width:30px;height:30px;border-radius:50%;background:{MAP_BRAND};'
-                f'border:2.5px solid {MAP_INK};box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;'
-                f'place-items:center;font:700 8px/1 sans-serif;color:{MAP_INK}">'
-                f'{VEH.get(w["vehicle_type"], "DRV")}</div>')),
-        ).add_to(m)
-
-    pts = [[r["lat"], r["lng"]], [s["lat"], s["lng"]]]
-    if w:
-        pts.append([w["current_lat"], w["current_lng"]])
-    m.fit_bounds(pts, padding=(40, 40))
-    return m
+    if ph == "to_pickup":
+        return {**base, **pins, "phase": ph, "legend": legend, "route": l1,
+                "t0": d["t0"], "dur": LEG1_SECONDS, "eta_min": leg1["minutes"],
+                "label": "ETA to pickup"}
+    if ph == "at_pickup":
+        return {**base, **pins, "phase": ph, "legend": legend, "route": l1, "hold": 1.0,
+                "label": "At the kitchen", "value": "0<span>min</span>",
+                "sub": f'{d["winner"]["name"]} is waiting for the handover'}
+    if ph == "to_shelter":
+        return {**base, **pins, "phase": ph, "legend": legend, "route": l2,
+                "done_route": l1, "t0": d["t0"], "dur": LEG2_SECONDS,
+                "eta_min": leg2["minutes"], "label": "ETA to shelter"}
+    return {**base, **pins, "phase": ph, "legend": legend, "route": l2,
+            "done_route": l1, "hold": 1.0, "label": "Delivered", "value": "✓",
+            "sub": f'{s["name"]} signed for the load'}
 
 
-# ---------------------------------------------------------------- native render helpers
-def render_timeline(stage_idx):
+# ---------------------------------------------------------------- shared UI
+def render_stepper(stage_idx):
     cols = st.columns(len(STAGES))
     for i, (col, label) in enumerate(zip(cols, STAGES)):
-        mark = "✅" if i <= stage_idx else "⚪"
-        col.caption(f"{mark} {label}")
+        if i < stage_idx:
+            col.markdown(f":green[:material/check_circle:] **{label}**")
+        elif i == stage_idx:
+            col.markdown(f":primary[:material/radio_button_checked:] **{label}**")
+        else:
+            col.markdown(f":gray[:material/radio_button_unchecked: {label}]")
 
 
-_KIND_AVATAR = {"user → agent": "🧑", "agent → user": "🤖", "driver → agent": "🛵"}
-
-
-def _avatar_for(kind):
-    if kind in _KIND_AVATAR:
-        return _KIND_AVATAR[kind]
-    if kind.startswith("tool"):
-        return "🛠️"
-    if kind.startswith("event"):
-        return "⚡"
-    return "💬"
-
-
-def render_brain():
-    st.subheader("Agent reasoning")
-    st.caption("strands · tool calls and returns")
-    with st.container(height=460, border=True):
-        if not st.session_state.steps:
-            st.info(f"Idle. All {len(DRV)} drivers are plotted on the map with their current "
-                    "positions. Send a rescue to start the trace.")
-            return
+def render_narration(height=380):
+    """The agent talking through the rescue in plain English."""
+    if not st.session_state.steps:
+        st.info("Idle. Send a rescue from **New rescue** and the agent will narrate "
+                "every decision here, step by step.")
+        return
+    with st.container(height=height, border=False):
         for s in st.session_state.steps:
-            with st.chat_message(name=s["kind"], avatar=_avatar_for(s["kind"])):
-                st.caption(f'{s["kind"]} · {s["t"]}')
-                st.markdown(f"**{s['title']}**")
-                if s["body"]:
-                    st.code(s["body"], language=None)
+            with st.chat_message(s["role"], avatar=ROLE_AVATAR.get(s["role"], "💬")):
+                st.markdown(s["text"])
+                if s["meta"]:
+                    st.caption(f'{s["meta"]} · {s["t"]}')
 
 
 # ---------------------------------------------------------------- pages
 def render_dashboard():
-    c1, c2 = st.columns([4, 1])
+    c1, c2 = st.columns([4, 1.1])
     with c1:
         st.header("Dashboard")
         st.caption("Session totals. Counters move only as the agent completes work.")
     with c2:
-        if st.button("New rescue", type="primary", width="stretch"):
+        if st.button("New rescue", type="primary", icon=":material/add:", width="stretch"):
             st.switch_page(page_new_rescue)
 
     s = st.session_state.stats
@@ -500,54 +514,58 @@ def render_dashboard():
     m3.metric("Food rescued", f'{s["kg"]:.1f} kg', border=True)
     m4.metric("CO₂ avoided", f'{s["co2"]:.1f} kg', border=True)
 
-    left, right = st.columns([1.6, 1])
+    left, right = st.columns([1.6, 1], gap="medium")
     with left:
-        active = 1 if st.session_state.delivery and st.session_state.delivery["phase"] != "delivered" else 0
+        active = 1 if st.session_state.delivery and \
+            st.session_state.delivery["phase"] != "delivered" else 0
         with st.container(border=True):
-            st.caption("Network")
+            st.subheader("Network")
             n1, n2, n3, n4 = st.columns(4)
-            n1.metric("Partner restaurants", f"{len(RESTAURANTS):,}")
-            n2.metric("Shelters & larders", len(SHELTERS))
-            n3.metric("Drivers on shift", f"{len(AVAIL)}/{len(DRV)}")
+            n1.metric("Restaurants", f"{len(RESTAURANTS):,}")
+            n2.metric("Shelters", len(SHELTERS))
+            n3.metric("On shift", f"{len(AVAIL)}/{len(DRV)}")
             n4.metric("In flight", active)
             st.divider()
             st.write(
                 "A manager describes surplus food in plain English. The agent classifies it "
                 "against FSA thermal rules, matches a shelter that accepts it, then broadcasts "
-                "the job to the three nearest capable drivers. The first to accept gets the route."
+                "the job to the three nearest capable drivers. First to accept gets the route."
             )
     with right:
         with st.container(border=True):
-            st.caption("Recent this session")
+            st.subheader("Recent this session")
             if st.session_state.history:
                 for i, h in enumerate(st.session_state.history[:3]):
                     st.markdown(f"**{h['food'][:70]}**")
-                    st.caption(f"{h['time']} · {h['shelter']}")
-                    if i < 2:
+                    st.caption(f"{h['time']} · {h['shelter']} · {h['meals']} meals")
+                    if i < min(2, len(st.session_state.history) - 1):
                         st.divider()
             else:
-                st.info("Nothing rescued yet. Open **New Rescue** and describe what is left over.")
+                st.info("Nothing rescued yet. Open **New rescue** and describe "
+                        "what is left over.")
 
 
 def render_new_rescue():
     st.header("New rescue")
-    st.caption("Pick the pickup kitchen, describe the surplus. The agent handles safety, shelter and driver.")
+    st.caption("Pick the pickup kitchen, describe the surplus. "
+               "The agent handles safety, shelter and driver.")
 
     left, right = st.columns([1.4, 1], gap="medium")
     with left:
-        st.markdown("**1 · Pickup kitchen**")
+        st.subheader("1 · Pickup kitchen")
         if st.session_state.restaurant:
             r = st.session_state.restaurant
-            cc1, cc2 = st.columns([4, 1])
-            with cc1:
-                st.markdown(f"**{r['name']}**")
-                st.caption(r["address"])
-            if cc2.button("Change", width="stretch"):
-                st.session_state.restaurant = None
-                st.rerun()
+            with st.container(border=True):
+                cc1, cc2 = st.columns([4, 1])
+                with cc1:
+                    st.markdown(f"**{r['name']}**")
+                    st.caption(r["address"])
+                if cc2.button("Change", icon=":material/edit:", width="stretch"):
+                    st.session_state.restaurant = None
+                    st.rerun()
         else:
             q = st.text_input("search", placeholder="Start typing a restaurant name or street…",
-                              label_visibility="collapsed")
+                              icon=":material/search:", label_visibility="collapsed")
             ql = q.strip().lower()
             if ql:
                 starts, contains = [], []
@@ -558,12 +576,12 @@ def render_new_rescue():
                     elif ql in n or ql in r.get("address", "").lower():
                         contains.append(r)
                 hits = starts + contains
-                st.caption(f'{len(hits)} of {len(RESTAURANTS)} match "{q.strip()}"'
+                st.caption(f'{len(hits)} of {len(RESTAURANTS):,} match "{q.strip()}"'
                            if hits else "No restaurant in the OpenStreetMap set matches that.")
-                with st.container(height=300, border=True):
+                with st.container(height=280, border=True):
                     for r in hits[:60]:
                         cuisine = f' · {r["cuisine"].replace("_", " ")}' if r.get("cuisine") else ""
-                        if st.button(f'{r["name"]}  —  {r.get("address", "")}{cuisine}',
+                        if st.button(f'{r["name"]} — {r.get("address", "")}{cuisine}',
                                      key=f'pick_{r["id"]}', width="stretch"):
                             st.session_state.restaurant = r
                             st.rerun()
@@ -571,16 +589,17 @@ def render_new_rescue():
                 st.caption(f"{len(RESTAURANTS):,} restaurants in the OSM set. "
                            f"Type any part of a name — Awaafi, Dishoom, Gorgie.")
 
-        st.markdown("**2 · Surplus food**")
+        st.subheader("2 · Surplus food")
         st.session_state.food_text = st.text_area(
-            "food", value=st.session_state.food_text, height=112,
-            placeholder="e.g. 5 kg hot chicken biryani and 2 kg garlic naan, needs collecting within the hour",
+            "food", value=st.session_state.food_text, height=120,
+            placeholder="e.g. 5 kg hot chicken biryani and 2 kg garlic naan, "
+                        "needs collecting within the hour",
             label_visibility="collapsed")
 
         p1, p2, p3 = st.columns(3)
         if p1.button("Hot curry, 6 kg", width="stretch"):
-            st.session_state.food_text = ("6 kg hot chicken curry and rice, cooked 40 minutes ago, "
-                                          "needs collecting soon")
+            st.session_state.food_text = ("6 kg hot chicken curry and rice, cooked 40 minutes "
+                                          "ago, needs collecting soon")
             st.rerun()
         if p2.button("Chilled sandwiches", width="stretch"):
             st.session_state.food_text = "3 kg chilled sandwiches and salad boxes from the counter"
@@ -589,7 +608,7 @@ def render_new_rescue():
             st.session_state.food_text = "12 loaves and 20 pastries, ambient, end of day"
             st.rerun()
 
-        if st.button("Send to agent", type="primary", width="stretch"):
+        if st.button("Send to agent", type="primary", icon=":material/send:", width="stretch"):
             launch_rescue()
             dd = st.session_state.delivery
             if dd and dd["phase"] == "broadcast":
@@ -602,12 +621,13 @@ def render_new_rescue():
         reqs += ["Thermal bag", "Accepts hot"] if sf["needs_hot"] else ["Accepts cold"]
         if sf["needs_meat"]:
             reqs.append("Accepts meat")
-        reqs.append("Status: available")
+        reqs.append("Available now")
 
         with st.container(border=True):
-            st.caption("Pre-flight read")
+            st.subheader("Pre-flight read")
             st.dataframe(
-                {"Property": ["Temperature class", "Category", "Estimated weight", "FSA handover window"],
+                {"Property": ["Temperature class", "Category", "Estimated weight",
+                              "FSA handover window"],
                  "Value": ["Hot / cooked" if sf["needs_hot"] else "Cold / ambient",
                            sf["category"].title(), f'{sf["weight_kg"]} kg',
                            f'{sf["fsa_window_minutes"]} min']},
@@ -615,7 +635,7 @@ def render_new_rescue():
             st.caption(sf["safety_note"])
 
         with st.container(border=True):
-            st.caption("Driver requirements implied")
+            st.subheader("Driver requirements")
             with st.container(horizontal=True):
                 for x in reqs:
                     st.badge(x, color="gray")
@@ -627,138 +647,124 @@ def render_live_tracking():
     with head1:
         st.header("Live tracking")
         if d:
-            st.caption(f'{d["restaurant"]["name"]} → {d["shelter"]["name"]} · {d["phase"].replace("_", " ")}')
+            st.caption(f'{d["restaurant"]["name"]} → {d["shelter"]["name"]}')
         else:
-            st.caption(f"All {len(DRV)} drivers shown at their current positions. Nothing dispatched yet.")
+            st.caption(f"All {len(DRV)} drivers at their current positions. "
+                       "Nothing dispatched yet.")
     with head2:
-        if st.button("Reset demo", width="stretch"):
+        if st.button("Reset demo", icon=":material/restart_alt:", width="stretch"):
             reset_demo()
             st.rerun()
 
-    @st.fragment(run_every=1.0 if (d and d["phase"] not in ("delivered",)) else None)
+    running = bool(d) and d["phase"] != "delivered"
+
+    @st.fragment(run_every=1.0 if running else None)
     def tracking_fragment():
-        dd = st.session_state.delivery
-        progress = advance()
+        advance()
         flush_toasts()
-
-        col_brain, col_map = st.columns([1, 2.1], gap="small")
-        with col_brain:
-            render_brain()
-        with col_map:
-            if not dd:
-                hud = ("Fleet standby", len(AVAIL), "drivers on shift",
-                       f"{len(DRV)} plotted across Edinburgh", 0)
-            elif dd["phase"] == "broadcast":
-                hud = ("Dispatching", len(dd["offers"]), "offers open",
-                       "Waiting for a driver to accept", 6)
-            elif dd["phase"] == "at_pickup":
-                hud = ("At the kitchen", 0, "min away",
-                       f'{dd["winner"]["name"]} is waiting for handover', 50)
-            elif dd["phase"] == "delivered":
-                hud = ("Delivered", "✓", "", "Route complete", 100)
-            else:
-                leg = dd["legs"][dd["leg"]]
-                remaining_min = leg["minutes"] * (1 - progress)
-                remaining_km = leg["km"] * (1 - progress)
-                pct = int((progress * 50) if dd["leg"] == 0 else (50 + progress * 50))
-                hud = ("ETA to pickup" if dd["leg"] == 0 else "ETA to shelter",
-                       "<1" if remaining_min < 1 else f"{int(round(remaining_min))}", "min",
-                       f'{remaining_km:.1f} km remaining of {leg["km"]:.1f} km', pct)
-
-            st.metric(hud[0], f"{hud[1]} {hud[2]}".strip(), border=True)
-            st.progress(min(100, max(0, hud[4])) / 100, text=hud[3])
-            st_folium(build_map(progress), height=420, width="stretch",
-                      returned_objects=[], key="tracking_map")
-
+        dd = st.session_state.delivery
         ph = dd["phase"] if dd else "idle"
-        mgr_active = ph in ("at_pickup", "delivered", "to_pickup")
-        drv_active = ph in ("broadcast", "to_shelter")
-        m_col, d_col = st.columns(2, gap="small")
 
-        with m_col:
-            with st.container(border=True):
-                top1, top2 = st.columns([3, 1])
-                top1.markdown("**Restaurant manager**")
-                with top2:
-                    st.badge(ph.replace("_", " "), color="primary" if mgr_active else "gray")
-                texts = {
-                    "idle": ("No open rescue", "Send a request from New Rescue to begin."),
-                    "broadcast": ("Looking for a driver",
-                                  "Offer is out to the three nearest capable volunteers."),
-                    "to_pickup": (f'{dd["winner"]["name"]} is on the way to you' if dd and dd.get("winner") else "Driver on the way",
-                                  f'Destination after pickup: {dd["shelter"]["name"]}.' if dd else ""),
-                    "at_pickup": (f'{dd["winner"]["name"]} is outside' if dd and dd.get("winner") else "Driver has arrived",
-                                  "Hand the food over and confirm below to release the driver."),
-                    "to_shelter": ("Food is in transit",
-                                   f'Heading to {dd["shelter"]["name"]}.' if dd else ""),
-                    "delivered": ("Rescue complete",
-                                  f'{dd["shelter"]["name"]} has signed for the load.' if dd else ""),
-                }[ph]
-                stage_idx = {"idle": -1, "broadcast": 0, "to_pickup": 1, "at_pickup": 2,
-                             "to_shelter": 3, "delivered": 4}[ph]
-                st.markdown(f"**{texts[0]}**")
-                st.caption(texts[1])
-                render_timeline(stage_idx)
-                if ph == "at_pickup":
-                    if st.button("Food handed over — release driver", type="primary",
-                                 width="stretch", key="handover"):
-                        do_handover()
-                        st.rerun(scope="fragment")
-                if ph == "delivered" and st.session_state.history:
-                    h = st.session_state.history[0]
-                    st.success(f'**{h["meals"]} meals logged** — {h["summary"]} · {h["co2"]} CO₂e avoided')
+        # The map animates itself in the browser; this only re-sends the plan,
+        # which changes on phase transitions rather than every tick.
+        live_map(map_plan(), height=520)
 
-        with d_col:
-            with st.container(border=True):
-                top1, top2 = st.columns([3, 1])
-                top1.markdown("**Driver app**")
-                with top2:
-                    st.badge("offer open" if ph == "broadcast" else ph.replace("_", " "),
-                            color="primary" if drv_active else "gray")
-                if not dd:
-                    st.info(f"No open offers. {len(AVAIL)} drivers are on shift waiting for a job.")
-                elif ph == "broadcast":
-                    for o in dd["offers"]:
-                        oc1, oc2 = st.columns([4, 1])
+        if dd:
+            render_stepper(PHASE_STAGE[ph])
+            st.divider()
+
+        sheet_l, sheet_r = st.columns([1, 1], gap="medium")
+
+        with sheet_l:
+            if not dd:
+                st.subheader("No active trip")
+                st.info(f"{len(AVAIL)} drivers are on shift waiting for a job. "
+                        "Start one from **New rescue**.")
+            elif ph == "broadcast":
+                st.subheader("Waiting for a driver")
+                st.caption("Offer is out to the three nearest capable volunteers. "
+                           "Tap Accept for any of them, or wait — the nearest takes "
+                           "it automatically.")
+                for o in dd["offers"]:
+                    with st.container(border=True):
+                        oc1, oc2 = st.columns([3, 1])
                         with oc1:
                             st.markdown(f'**{o["name"]}**')
-                            st.caption(f'{VEH.get(o["vehicle_type"], "")} · {o["distance_km"]:.1f} km away · '
-                                       f'{o["max_capacity_kg"]} kg · {o["neighbourhood"]} · {o["rating"]}★')
+                            st.caption(f'{o["distance_km"]:.1f} km away · '
+                                       f'{VEH.get(o["vehicle_type"], "")} · '
+                                       f'{o["max_capacity_kg"]} kg · {o["rating"]}★')
                         with oc2:
                             if o["status"] == "pending":
-                                if st.button("Accept", key=f'acc_{o["driver_id"]}', width="stretch"):
+                                if st.button("Accept", key=f'acc_{o["driver_id"]}',
+                                             type="primary", width="stretch"):
                                     do_accept(o["driver_id"])
                                     st.rerun(scope="fragment")
                             else:
                                 st.badge("Accepted" if o["status"] == "won" else "Taken",
-                                        color="green" if o["status"] == "won" else "gray")
-                    st.caption("Tap Accept on any driver, or wait — the nearest one takes it automatically.")
-                else:
-                    w = dd["winner"]
-                    instr = {"to_pickup": ("Head to the pickup",
-                                           f'{dd["restaurant"]["name"]} — {dd["restaurant"]["address"]}'),
-                             "at_pickup": ("You have arrived", "Collect the food from the kitchen team."),
-                             "to_shelter": ("Deliver the load",
-                                            f'{dd["shelter"]["name"]} — {dd["shelter"]["address"]}'),
-                             "delivered": ("Job done", "You are back on the available roster.")}[ph]
-                    bag = " · thermal bag" if w.get("has_thermal_bag") else ""
-                    ic1, ic2 = st.columns([1, 4])
-                    with ic1:
-                        st.markdown(f"### {''.join(x[0] for x in w['name'].split()[:2])}")
-                    with ic2:
-                        st.markdown(f'**{w["name"]}**')
-                        st.caption(f'{VEH.get(w["vehicle_type"], "")} · {w.get("vehicle_reg", "")} · '
-                                   f'{w["neighbourhood"]} · {w["max_capacity_kg"]} kg{bag} · {w["rating"]}★ rating')
-                    st.markdown(f"**{instr[0]}**")
-                    st.caption(instr[1])
-                    if ph == "at_pickup":
-                        if st.button("Confirm food collected", width="stretch", key="drv_collect"):
-                            do_handover()
-                            st.rerun(scope="fragment")
-                    elif ph == "to_pickup":
-                        if st.button("Report arrival early", width="stretch", key="drv_arrive"):
-                            do_arrive()
-                            st.rerun(scope="fragment")
+                                         color="green" if o["status"] == "won" else "gray")
+            else:
+                w = dd["winner"]
+                headline = {
+                    "to_pickup": f'{w["name"]} is on the way to you',
+                    "at_pickup": f'{w["name"]} is outside',
+                    "to_shelter": "Food is in transit",
+                    "delivered": "Rescue complete",
+                }[ph]
+                st.subheader(headline)
+
+                with st.container(border=True):
+                    a1, a2 = st.columns([1, 3])
+                    with a1:
+                        st.title(initials(w["name"]))
+                    with a2:
+                        st.markdown(f'**{w["name"]}**  ·  {w["rating"]}★')
+                        st.caption(f'{VEH.get(w["vehicle_type"], "")} '
+                                   f'{w.get("vehicle_reg", "")} · {w["neighbourhood"]} · '
+                                   f'carries {w["max_capacity_kg"]} kg')
+                    with st.container(horizontal=True):
+                        st.badge(VEH.get(w["vehicle_type"], ""),
+                                 icon=VEH_ICON.get(w["vehicle_type"]), color="gray")
+                        st.badge(f'{dd["safety"]["weight_kg"]} kg load', color="gray")
+                        if w.get("has_thermal_bag"):
+                            st.badge("Thermal bag", icon=":material/thermostat:", color="green")
+                        st.badge(f'FSA {dd["safety"]["fsa_window_minutes"]} min',
+                                 icon=":material/timer:", color="orange")
+
+                instr = {
+                    "to_pickup": ("Head to the pickup",
+                                  f'{dd["restaurant"]["name"]} — {dd["restaurant"]["address"]}'),
+                    "at_pickup": ("Collect the food",
+                                  "Take the load from the kitchen team and confirm below."),
+                    "to_shelter": ("Deliver the load",
+                                   f'{dd["shelter"]["name"]} — {dd["shelter"]["address"]}'),
+                    "delivered": ("Job done", "You are back on the available roster."),
+                }[ph]
+                st.markdown(f"**{instr[0]}**")
+                st.caption(instr[1])
+
+                if ph == "at_pickup":
+                    b1, b2 = st.columns(2)
+                    if b1.button("Food handed over", type="primary",
+                                 icon=":material/check:", width="stretch", key="handover"):
+                        do_handover()
+                        st.rerun(scope="fragment")
+                    if b2.button("Confirm collected", icon=":material/inventory_2:",
+                                 width="stretch", key="drv_collect"):
+                        do_handover()
+                        st.rerun(scope="fragment")
+                elif ph == "to_pickup":
+                    if st.button("Report arrival early", icon=":material/flag:",
+                                 width="stretch", key="drv_arrive"):
+                        do_arrive()
+                        st.rerun(scope="fragment")
+                elif ph == "delivered" and st.session_state.history:
+                    h = st.session_state.history[0]
+                    st.success(f'**{h["meals"]} meals logged** — {h["summary"]} · '
+                               f'{h["co2"]} CO₂e avoided')
+
+        with sheet_r:
+            st.subheader("What the agent is doing")
+            render_narration(height=420)
 
     tracking_fragment()
 
@@ -769,14 +775,15 @@ def render_active_deliveries():
     if d and d["phase"] in ("to_pickup", "at_pickup", "to_shelter"):
         w = d["winner"]
         with st.container(border=True):
-            st.markdown(f"**{d['food_text']}**")
+            st.subheader(d["food_text"])
             st.caption(f'{d["restaurant"]["name"]} → {d["shelter"]["name"]}')
             with st.container(horizontal=True):
-                st.badge(w["name"], color="gray")
-                st.badge(VEH.get(w["vehicle_type"], ""), color="gray")
+                st.badge(w["name"], icon=":material/person:", color="gray")
+                st.badge(VEH.get(w["vehicle_type"], ""),
+                         icon=VEH_ICON.get(w["vehicle_type"]), color="gray")
                 st.badge(f'{d["safety"]["weight_kg"]} kg', color="gray")
                 st.badge(d["phase"].replace("_", " "), color="primary")
-            if st.button("Track", type="primary"):
+            if st.button("Track", type="primary", icon=":material/near_me:"):
                 st.switch_page(page_live_tracking)
     else:
         st.info("Nothing in flight. A rescue appears here from dispatch until it is delivered.")
@@ -797,7 +804,6 @@ def render_shelters():
         demand = s.get("demand_score", 0)
         color = "red" if demand >= 4.5 else ("orange" if demand >= 4 else "green")
         cap, cur = s.get("capacity_meals", 0), s.get("current_intake_meals", 0)
-        pct = (cur / cap) if cap else 0
         with cols[i % 3]:
             with st.container(border=True):
                 st.markdown(f"**{s['name']}**")
@@ -807,8 +813,9 @@ def render_shelters():
                     with st.container(horizontal=True):
                         for t in s["dietary_tags"]:
                             st.badge(t.replace("_", " "), color="gray")
-                st.progress(min(1.0, pct),
-                            text=f'{cur}/{cap} meals · {s.get("opens_24h", "")}–{s.get("closes_24h", "")}')
+                st.progress(min(1.0, (cur / cap) if cap else 0),
+                            text=f'{cur}/{cap} meals · '
+                                 f'{s.get("opens_24h", "")}–{s.get("closes_24h", "")}')
 
 
 def render_drivers():
@@ -821,7 +828,8 @@ def render_drivers():
     cols = st.columns(3)
     for i, d in enumerate(rows):
         status = d.get("status", "")
-        badge_color = "green" if status == "available" else ("primary" if status == "busy" else "gray")
+        badge_color = "green" if status == "available" else (
+            "primary" if status == "busy" else "gray")
         kit = ("Thermal bag" if d.get("has_thermal_bag")
                else ("Cool box" if d.get("has_cool_box") else "No thermal kit"))
         with cols[i % 3]:
@@ -833,19 +841,19 @@ def render_drivers():
                 with top2:
                     st.badge(status.replace("_", " "), color=badge_color)
                 with st.container(horizontal=True):
-                    st.badge(VEH.get(d.get("vehicle_type"), ""), color="gray")
+                    st.badge(VEH.get(d.get("vehicle_type"), ""),
+                             icon=VEH_ICON.get(d.get("vehicle_type")), color="gray")
                     st.badge(f'Max {d.get("max_capacity_kg", "?")} kg', color="gray")
                     st.badge(kit, color="gray")
-                    st.badge(f'ETA {d.get("eta_minutes", "?")} min', color="gray")
 
 
 def render_history():
-    h1, h2 = st.columns([4, 1])
+    h1, h2 = st.columns([4, 1.1])
     with h1:
         st.header("Session history")
         st.caption("Rescues completed in this session")
     with h2:
-        if st.button("Clear history", width="stretch"):
+        if st.button("Clear history", icon=":material/delete:", width="stretch"):
             st.session_state.history = []
             st.session_state.stats = {"rescues": 0, "meals": 0, "kg": 0.0, "co2": 0.0}
             st.rerun()
@@ -857,17 +865,16 @@ def render_history():
     st.dataframe(
         [{"Time": h["time"], "ID": h["id"], "Food": h["food"], "Route": h["route"],
           "Meals": h["meals"], "CO₂ avoided": h["co2"]} for h in st.session_state.history],
-        hide_index=True, width="stretch",
-    )
+        hide_index=True, width="stretch")
 
 
 def render_alerts():
-    a1, a2 = st.columns([4, 1])
+    a1, a2 = st.columns([4, 1.1])
     with a1:
         st.header("Alerts")
         st.caption("Every status change the network broadcast, newest first")
     with a2:
-        if st.button("Clear", width="stretch"):
+        if st.button("Clear", icon=":material/delete:", width="stretch"):
             st.session_state.notifs = []
             st.session_state.toast_cursor = 0
             st.rerun()
@@ -877,38 +884,43 @@ def render_alerts():
         return
 
     for n in st.session_state.notifs:
-        alert_fn = ACCENTS.get(n["accent"], ACCENTS["brand"])["alert"]
-        alert_fn(f'**{n["title"]}** · {n["role"]}  \n{n["body"]}  \n:gray[{n["time"]}]')
+        ACCENTS.get(n["accent"], ACCENTS["brand"])["alert"](
+            f'**{n["title"]}** · {n["role"]}  \n{n["body"]}  \n:gray[{n["time"]}]')
 
 
-# ---------------------------------------------------------------- header + navigation
+# ---------------------------------------------------------------- header + nav
 SHELTERS = load("shelters.json")
 RESTAURANTS = load("restaurants.json")
 DRV = drivers_live()
 AVAIL = [d for d in DRV if d.get("status") == "available"]
 
 st.title("🍽 RescueAgent")
-st.caption("Edinburgh Food Rescue Network")
 with st.container(horizontal=True):
-    st.badge(f"qwen3-235b · {BEDROCK_REGION}", color="gray")
-    st.badge(f"routing: {st.session_state.route_source}", color="gray")
-    st.badge(f"alerts: {len(st.session_state.notifs)}", color="gray")
+    st.badge("Edinburgh food rescue network", icon=":material/hub:", color="gray")
+    st.badge(f"qwen3-235b · {BEDROCK_REGION}", icon=":material/smart_toy:", color="gray")
+    st.badge(f"routing: {st.session_state.route_source}", icon=":material/route:", color="gray")
+    st.badge(f"{len(st.session_state.notifs)} alerts",
+             icon=":material/notifications:", color="gray")
 
 with st.sidebar:
     st.subheader("Demo controls")
     st.session_state.use_bedrock = st.toggle(
         "Call Bedrock agent", value=st.session_state.use_bedrock,
-        help="Off = deterministic tool pipeline only, no network call. Useful if the venue wifi is bad.")
+        help="Off = deterministic tool pipeline only, no network call. "
+             "Useful if the venue wifi is bad.")
     st.caption(f"Leg 1 {LEG1_SECONDS:.0f}s · Leg 2 {LEG2_SECONDS:.0f}s · "
                f"auto-accept {OFFER_SECONDS:.0f}s")
 
-page_dashboard = st.Page(render_dashboard, title="Dashboard", icon=":material/home:", default=True)
-page_new_rescue = st.Page(render_new_rescue, title="New Rescue", icon=":material/add_circle:")
-page_live_tracking = st.Page(render_live_tracking, title="Live Tracking", icon=":material/near_me:")
-page_active_deliveries = st.Page(render_active_deliveries, title="Active Deliveries",
+page_dashboard = st.Page(render_dashboard, title="Dashboard",
+                         icon=":material/dashboard:", default=True)
+page_new_rescue = st.Page(render_new_rescue, title="New rescue",
+                          icon=":material/add_circle:")
+page_live_tracking = st.Page(render_live_tracking, title="Live tracking",
+                             icon=":material/near_me:")
+page_active_deliveries = st.Page(render_active_deliveries, title="Active deliveries",
                                  icon=":material/local_shipping:")
 page_shelters = st.Page(render_shelters, title="Shelters", icon=":material/storefront:")
-page_drivers = st.Page(render_drivers, title="Drivers", icon=":material/pedal_bike:")
+page_drivers = st.Page(render_drivers, title="Drivers", icon=":material/group:")
 page_history = st.Page(render_history, title="History", icon=":material/history:")
 page_alerts = st.Page(render_alerts, title="Alerts", icon=":material/notifications:")
 
@@ -918,5 +930,5 @@ pg = st.navigation([
 ], position="top")
 pg.run()
 
-if pg.title != "Live Tracking":
+if pg.title != "Live tracking":
     flush_toasts()
