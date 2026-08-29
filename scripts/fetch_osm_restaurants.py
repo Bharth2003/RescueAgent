@@ -18,14 +18,27 @@ import requests
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
-# Bounding box around central Edinburgh (south, west, north, east).
-# This covers the main city area including Old Town, New Town, Leith, and Southside.
-BBOX = (55.90, -3.36, 56.00, -3.05)
+# Bounding box around Edinburgh (south, west, north, east), widened to take in
+# Portobello, Corstorphine, Currie and the airport fringe as well as the centre.
+BBOX = (55.86, -3.44, 56.02, -3.02)
 
+# Anywhere that plausibly ends the day with surplus food, not just sit-down
+# restaurants: pubs and bars do kitchen service, bakeries and delis bin unsold
+# stock, supermarkets and convenience shops have short-date shelves.
+AMENITIES = ("restaurant|cafe|fast_food|pub|bar|bakery|ice_cream|food_court|"
+             "biergarten|canteen")
+SHOPS = "bakery|deli|greengrocer|supermarket|convenience|butcher|pastry|farm|seafood"
+
+# Query nodes AND ways/relations - a lot of venues are mapped as building
+# polygons rather than points, and the node-only query silently missed them all.
 QUERY = f"""
-[out:json][timeout:90];
+[out:json][timeout:180];
 (
-  node["amenity"~"^(restaurant|cafe|fast_food)$"]["name"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
+  node["amenity"~"^({AMENITIES})$"]["name"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
+  way["amenity"~"^({AMENITIES})$"]["name"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
+  relation["amenity"~"^({AMENITIES})$"]["name"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
+  node["shop"~"^({SHOPS})$"]["name"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
+  way["shop"~"^({SHOPS})$"]["name"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
 );
 out center;
 """
@@ -49,13 +62,24 @@ def _website(tags: dict) -> str:
 
 
 def _address(tags: dict) -> str:
-    parts = [
-        tags.get("addr:housenumber", ""),
-        tags.get("addr:street", ""),
-        tags.get("addr:city", ""),
-        tags.get("addr:postcode", ""),
-    ]
-    return ", ".join(p for p in parts if p)
+    """Best address we can assemble.
+
+    Includes suburb/neighbourhood, because plenty of chain branches carry no
+    housenumber or street and would otherwise all render as bare "Edinburgh",
+    leaving the picker unable to tell one branch from another.
+    """
+    street = " ".join(p for p in (tags.get("addr:housenumber", ""),
+                                  tags.get("addr:street", "")) if p)
+    area = (tags.get("addr:suburb") or tags.get("addr:neighbourhood")
+            or tags.get("addr:place") or tags.get("addr:district") or "")
+    parts = [street, area, tags.get("addr:city", ""), tags.get("addr:postcode", "")]
+    out, seen = [], set()
+    for p in parts:
+        p = p.strip()
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return ", ".join(out)
 
 
 def main() -> int:
@@ -73,28 +97,30 @@ def main() -> int:
     print(f"Overpass returned {len(elements)} raw elements.")
 
     restaurants = []
-    seen_names: set[str] = set()
-    for i, el in enumerate(elements):
+    # Dedupe on name + rough location, NOT name alone. Deduping by name threw
+    # away every branch of every chain (all the Greggs collapsed into one row),
+    # while ~3 decimal places still merges the duplicate nodes a single venue
+    # gets for its outdoor seating or its building outline.
+    seen: set[tuple[str, float, float]] = set()
+    for el in elements:
         tags = el.get("tags", {})
         name = tags.get("name", "").strip()
         if not name:
             continue
-
-        # Dedupe by name (some restaurants have multiple OSM nodes for outdoor seating etc).
-        key = name.lower()
-        if key in seen_names:
-            continue
-        seen_names.add(key)
 
         lat = el.get("lat") or el.get("center", {}).get("lat")
         lng = el.get("lon") or el.get("center", {}).get("lon")
         if lat is None or lng is None:
             continue
 
+        key = (name.lower(), round(lat, 3), round(lng, 3))
+        if key in seen:
+            continue
+        seen.add(key)
+
         restaurants.append({
-            "id": f"rest_{i:04d}",
             "name": name,
-            "amenity_type": tags.get("amenity", "restaurant"),
+            "amenity_type": tags.get("amenity") or tags.get("shop") or "restaurant",
             "cuisine": _cuisine_tags(tags),
             "address": _address(tags),
             "phone": _phone(tags),
@@ -103,8 +129,10 @@ def main() -> int:
             "lng": lng,
         })
 
-    # Sort so the JSON is stable across re-fetches.
-    restaurants.sort(key=lambda r: r["name"].lower())
+    # Sort so the JSON is stable across re-fetches, then number them.
+    restaurants.sort(key=lambda r: (r["name"].lower(), r["lat"], r["lng"]))
+    for i, r in enumerate(restaurants):
+        r["id"] = f"rest_{i:04d}"
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUT_PATH, "w", encoding="utf-8") as f:

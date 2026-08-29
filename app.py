@@ -11,6 +11,7 @@ on every rerun and made it blink. Type scale, colours and radii live in
 Run:  streamlit run app.py
 """
 
+import collections
 import json
 import os
 import time
@@ -99,6 +100,37 @@ def load(name):
                           "address": r.get("address") or "Edinburgh"})
         return clean
     return rows
+
+
+@st.cache_data
+def restaurant_index():
+    """id -> record, plus the one-line label the picker searches against.
+
+    The label carries name, address, cuisine and venue type because
+    st.selectbox filters on the rendered label — putting them all in there is
+    what makes "indian", "bakery" or a street name find the right kitchen.
+    """
+    by_id, labels = {}, {}
+    for r in RESTAURANTS:
+        kind = []
+        if r.get("cuisine"):
+            kind.append(str(r["cuisine"]).replace("_", " "))
+        t = (r.get("amenity_type") or "").replace("_", " ")
+        if t and t not in kind:
+            kind.append(t)
+        addr = (r.get("address") or "").strip() or "Edinburgh"
+        by_id[r["id"]] = r
+        labels[r["id"]] = f'{r["name"]} — {addr}' + (f' · {" · ".join(kind)}' if kind else "")
+
+    # A few dozen venues (mostly chain branches OSM never gave an address) would
+    # otherwise render as identical rows; pin those to their coordinates so every
+    # option in the picker is distinguishable.
+    counts = collections.Counter(labels.values())
+    for rid, lab in labels.items():
+        if counts[lab] > 1:
+            r = by_id[rid]
+            labels[rid] = f'{lab} · {r["lat"]:.4f}, {r["lng"]:.4f}'
+    return by_id, labels
 
 
 def drivers_live():
@@ -553,41 +585,43 @@ def render_new_rescue():
     left, right = st.columns([1.4, 1], gap="medium")
     with left:
         st.subheader("1 · Pickup kitchen")
+        by_id, labels = restaurant_index()
+
+        kinds = sorted({(r.get("amenity_type") or "").replace("_", " ")
+                        for r in RESTAURANTS} - {""})
+        picked_kinds = st.pills("Venue type", kinds, selection_mode="multi",
+                                label_visibility="collapsed")
+        pool = [r for r in RESTAURANTS
+                if not picked_kinds
+                or (r.get("amenity_type") or "").replace("_", " ") in picked_kinds]
+
+        ids = [r["id"] for r in pool]
+        current = st.session_state.restaurant["id"] if st.session_state.restaurant else None
+        choice = st.selectbox(
+            "Pickup kitchen", ids,
+            index=ids.index(current) if current in ids else None,
+            format_func=lambda i: labels[i], label_visibility="collapsed",
+            placeholder=f"Click to browse all {len(pool):,} kitchens, or type a name, "
+                        f"street or cuisine…",
+        )
+        if choice != current:
+            st.session_state.restaurant = by_id.get(choice) if choice else None
+            st.rerun()
+
         if st.session_state.restaurant:
             r = st.session_state.restaurant
             with st.container(border=True):
-                cc1, cc2 = st.columns([4, 1])
-                with cc1:
-                    st.markdown(f"**{r['name']}**")
-                    st.caption(r["address"])
-                if cc2.button("Change", icon=":material/edit:", width="stretch"):
-                    st.session_state.restaurant = None
-                    st.rerun()
+                st.markdown(f"**{r['name']}**")
+                st.caption((r.get("address") or "").strip() or "Edinburgh")
+                with st.container(horizontal=True):
+                    if r.get("amenity_type"):
+                        st.badge(r["amenity_type"].replace("_", " "),
+                                 icon=":material/storefront:", color="gray")
+                    if r.get("cuisine"):
+                        st.badge(str(r["cuisine"]).replace("_", " "), color="gray")
         else:
-            q = st.text_input("search", placeholder="Start typing a restaurant name or street…",
-                              icon=":material/search:", label_visibility="collapsed")
-            ql = q.strip().lower()
-            if ql:
-                starts, contains = [], []
-                for r in RESTAURANTS:
-                    n = r["name"].lower()
-                    if n.startswith(ql):
-                        starts.append(r)
-                    elif ql in n or ql in r.get("address", "").lower():
-                        contains.append(r)
-                hits = starts + contains
-                st.caption(f'{len(hits)} of {len(RESTAURANTS):,} match "{q.strip()}"'
-                           if hits else "No restaurant in the OpenStreetMap set matches that.")
-                with st.container(height=280, border=True):
-                    for r in hits[:60]:
-                        cuisine = f' · {r["cuisine"].replace("_", " ")}' if r.get("cuisine") else ""
-                        if st.button(f'{r["name"]} — {r.get("address", "")}{cuisine}',
-                                     key=f'pick_{r["id"]}', width="stretch"):
-                            st.session_state.restaurant = r
-                            st.rerun()
-            else:
-                st.caption(f"{len(RESTAURANTS):,} restaurants in the OSM set. "
-                           f"Type any part of a name — Awaafi, Dishoom, Gorgie.")
+            st.caption(f"{len(RESTAURANTS):,} kitchens across Edinburgh — restaurants, "
+                       f"cafes, pubs, bakeries and food shops.")
 
         st.subheader("2 · Surplus food")
         st.session_state.food_text = st.text_area(
