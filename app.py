@@ -1,17 +1,10 @@
 """
 RescueAgent — Edinburgh Food Rescue
 ===================================
-Streamlit dashboard with real-time driver tracking.
-
-What changed vs v2.0
---------------------
-* Warm light theme, Bricolage Grotesque + Instrument Sans, denser layout.
-* Live tracking is a real map: OSRM road geometry, a driver marker that moves
-  along the route, ETA countdown, distance remaining and a status timeline.
-* Rescues are broadcast to the 3 nearest CAPABLE drivers; first to accept wins.
-* Manager and driver both act, side by side under a shared map.
-* st.toast notification on every status change, including driver arrival.
-* Bedrock / Strands wiring unchanged.
+Streamlit dashboard with real-time driver tracking, built entirely from
+native Streamlit components (st.navigation, st.metric, st.badge,
+st.chat_message, st.container) — no injected HTML/CSS for layout or chrome.
+Theming (dark, brand orange) lives in .streamlit/config.toml.
 
 Run:  streamlit run app.py
 """
@@ -46,11 +39,21 @@ LEG2_SECONDS = 40.0     # restaurant -> shelter
 OFFER_SECONDS = 8.0     # auto-accept if nobody taps Accept
 PICKUP_SECONDS = 9.0    # auto-handover if nobody taps the button
 
-BRAND, GREEN, AMBER, RED, VIOLET, MUTED = "#FF7A2F", "#34D399", "#FBBF24", "#F87171", "#A78BFA", "#6B737E"
-INK, PANEL, LINE, DIM = "#0E1013", "#171A20", "#23272F", "#9BA3AE"
 VEH = {"van": "VAN", "car": "CAR", "motorbike": "MOTO", "e-bike": "E-BIKE",
        "bicycle": "BIKE", "scooter": "SCOOTER"}
 STAGES = ["Assigned", "En route to pickup", "At restaurant", "Delivering", "Delivered"]
+
+# hex colors used only for the folium map (leaflet needs real colors)
+MAP_BRAND, MAP_GREEN, MAP_VIOLET, MAP_INK = "#FF7A2F", "#34D399", "#A78BFA", "#0E1013"
+
+# accent key -> (st.badge color, toast icon, st alert function)
+ACCENTS = {
+    "brand": {"badge": "primary", "toast": "🛵", "alert": st.info},
+    "green": {"badge": "green", "toast": "✅", "alert": st.success},
+    "amber": {"badge": "orange", "toast": "⏳", "alert": st.warning},
+    "red": {"badge": "red", "toast": "⚠️", "alert": st.error},
+    "violet": {"badge": "violet", "toast": "🏠", "alert": st.info},
+}
 
 SYSTEM_PROMPT = """\
 You are RescueAgent, an AI that coordinates food rescue in Edinburgh.
@@ -132,7 +135,6 @@ def get_agent():
 # ---------------------------------------------------------------- session
 def init_state():
     defaults = {
-        "page": "Dashboard",
         "delivery": None,          # active delivery dict
         "steps": [],               # agent reasoning trace
         "notifs": [],              # alert feed
@@ -156,12 +158,12 @@ def now_str():
     return datetime.now().strftime("%H:%M:%S")
 
 
-def step(kind, title, body="", color=BRAND):
+def step(kind, title, body="", accent="brand"):
     st.session_state.steps.append({"kind": kind, "title": title, "body": body,
-                                   "color": color, "t": now_str()})
+                                   "accent": accent, "t": now_str()})
 
 
-def notify(title, body, role, accent=BRAND):
+def notify(title, body, role, accent="brand"):
     st.session_state.notifs.insert(0, {"title": title, "body": body, "role": role,
                                        "accent": accent, "time": now_str()})
 
@@ -170,143 +172,11 @@ def flush_toasts():
     """Toast anything added since the last run."""
     pending = st.session_state.notifs[:max(0, len(st.session_state.notifs) - st.session_state.toast_cursor)]
     for n in reversed(pending):
-        icon = "✅" if n["accent"] == GREEN else ("⚠️" if n["accent"] == RED else "🛵")
-        st.toast(f"**{n['title']}**  \n{n['body']}", icon=icon)
+        st.toast(f"**{n['title']}**  \n{n['body']}", icon=ACCENTS.get(n["accent"], ACCENTS["brand"])["toast"])
     st.session_state.toast_cursor = len(st.session_state.notifs)
 
 
-# ---------------------------------------------------------------- styling
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
-html, body, [class*="css"], .stMarkdown, .stButton, input, textarea {
-    font-family:'Instrument Sans', system-ui, sans-serif !important;
-}
-.stApp { background:#0E1013; color:#E9EBEE; }
-header[data-testid="stHeader"] { background:#12151A; border-bottom:1px solid #23272F; }
-section[data-testid="stSidebar"] { background:#12151A; border-right:1px solid #23272F; }
-.block-container { padding-top:1rem; padding-bottom:3rem; max-width:1620px; }
-h1,h2,h3 { font-family:'Bricolage Grotesque',sans-serif !important; letter-spacing:-0.6px; color:#E9EBEE !important; }
-h1 { font-size:27px !important; font-weight:700 !important; margin-bottom:2px !important; }
-h2 { font-size:19px !important; font-weight:700 !important; }
-h3 { font-size:16px !important; font-weight:700 !important; }
-p, span, label, .stCaption { color:#9BA3AE; }
-
-/* header strip */
-.ra-top { display:flex; align-items:center; justify-content:space-between;
-  background:#12151A; border:1px solid #23272F; border-radius:9px;
-  padding:11px 18px; margin-bottom:14px; }
-.ra-brand { font-family:'Bricolage Grotesque',sans-serif; font-weight:700;
-  font-size:17px; letter-spacing:-0.4px; color:#E9EBEE; }
-.ra-meta { font-family:'IBM Plex Mono',monospace; font-size:11px; color:#6B737E; }
-
-/* cards */
-.ra-card { background:#171A20; border:1px solid #23272F; border-radius:9px;
-  padding:16px 18px; margin-bottom:11px; }
-.ra-card.active-mgr { border-color:#FF7A2F; }
-.ra-card.active-drv { border-color:#4C5663; }
-.ra-label { font-size:10.5px; font-weight:600; letter-spacing:.11em;
-  text-transform:uppercase; color:#6B737E; }
-.ra-num { font-family:'Bricolage Grotesque',sans-serif; font-size:36px;
-  font-weight:600; letter-spacing:-1.6px; line-height:1.05; margin-top:5px; color:#E9EBEE; }
-.ra-num small { font-size:17px; letter-spacing:0; color:#6B737E; }
-.ra-chip { display:inline-block; border:1px solid #2A303A; background:#12151A;
-  border-radius:5px; padding:3px 8px; font-size:11px; font-weight:600;
-  color:#9BA3AE; margin:0 5px 5px 0; }
-.ra-ph { width:72px; height:72px; border-radius:8px; flex:none;
-  background:repeating-linear-gradient(135deg,#1B1F26 0 6px,#23272F 6px 12px);
-  display:grid; place-items:center; font-family:'IBM Plex Mono',monospace;
-  font-size:8.5px; color:#5B626C; text-align:center; line-height:1.3; }
-
-/* reasoning panel */
-.ra-brain { background:#12151A; border:1px solid #23272F; border-radius:9px;
-  padding:16px 18px; color:#E9EBEE; height:520px; overflow-y:auto; }
-.ra-brain .hd { font-size:10.5px; font-weight:600; letter-spacing:.11em;
-  text-transform:uppercase; color:#6B737E; }
-.ra-brain .sub { font-family:'IBM Plex Mono',monospace; font-size:10.5px;
-  color:#4C5663; margin:4px 0 14px; }
-.ra-stepbox { background:#171A20; border-radius:0 7px 7px 0; padding:10px 12px;
-  margin-bottom:9px; }
-.ra-stepbox .k { font-family:'IBM Plex Mono',monospace; font-size:10.5px;
-  letter-spacing:.05em; }
-.ra-stepbox .ti { font-size:13px; font-weight:600; margin-top:5px; color:#E9EBEE; }
-.ra-stepbox .bd { font-family:'IBM Plex Mono',monospace; font-size:11px;
-  color:#7A828D; margin-top:5px; line-height:1.55; white-space:pre-wrap; }
-.ra-empty { border:1px dashed #2A303A; border-radius:8px; padding:20px 16px;
-  color:#6B737E; font-size:12.5px; line-height:1.6; }
-
-/* hud */
-.ra-hud { background:#12151A; border:1px solid #2A303A; border-radius:8px;
-  padding:12px 14px; margin-bottom:8px; }
-.ra-hud .v { font-family:'Bricolage Grotesque',sans-serif; font-size:28px;
-  font-weight:600; letter-spacing:-1.3px; line-height:1; color:#E9EBEE; }
-.ra-bar { height:4px; border-radius:2px; background:#23272F; overflow:hidden; margin-top:9px; }
-.ra-bar > i { display:block; height:100%; background:#FF7A2F; }
-
-/* buttons */
-.stButton > button { border-radius:7px !important; font-weight:600 !important;
-  border:1px solid #2A303A !important; background:#171A20 !important;
-  color:#C7CDD6 !important; padding:.5rem 1rem !important; font-size:13px !important; }
-.stButton > button:hover { border-color:#39414D !important; color:#fff !important; }
-.stButton > button[kind="primary"] { background:#FF7A2F !important; color:#0E1013 !important;
-  border:none !important; font-weight:700 !important; }
-.stButton > button[kind="primary"]:hover { background:#FF8E4D !important; }
-
-/* sidebar radio nav */
-div[role="radiogroup"] { gap:3px !important; }
-div[role="radiogroup"] label { background:#171A20 !important; border:1px solid #23272F !important;
-  border-radius:7px !important; padding:7px 12px !important; margin:0 !important; }
-div[role="radiogroup"] label p { font-size:13px !important; font-weight:600 !important;
-  color:#9BA3AE !important; }
-
-/* inputs */
-textarea, input { background:#12151A !important; border-radius:8px !important;
-  border:1px solid #2A303A !important; color:#E9EBEE !important; font-size:14.5px !important; }
-textarea:focus, input:focus { border-color:#FF7A2F !important; }
-[data-testid="stMetricValue"] { font-family:'Bricolage Grotesque',sans-serif; color:#E9EBEE; }
-[data-testid="stToast"] { background:#1B1F26 !important; border:1px solid #2A303A !important;
-  color:#E9EBEE !important; }
-hr { border-color:#23272F !important; }
-footer, #MainMenu { visibility:hidden; }
-</style>
-""", unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------- header
-SHELTERS = load("shelters.json")
-RESTAURANTS = load("restaurants.json")
-DRV = drivers_live()
-AVAIL = [d for d in DRV if d.get("status") == "available"]
-
-st.markdown(
-    f'<div class="ra-top">'
-    f'<div style="display:flex;align-items:center;gap:24px">'
-    f'<span class="ra-brand">RescueAgent</span>'
-    f'<span style="font-size:12.5px;color:#8A8072">Edinburgh Food Rescue Network</span></div>'
-    f'<div style="display:flex;gap:18px">'
-    f'<span class="ra-meta">qwen3-235b · {BEDROCK_REGION}</span>'
-    f'<span class="ra-meta">routing: {st.session_state.route_source}</span>'
-    f'<span class="ra-meta">alerts: {len(st.session_state.notifs)}</span></div></div>',
-    unsafe_allow_html=True)
-
-PAGES = ["Dashboard", "New Rescue", "Live Tracking", "Active Deliveries",
-         "Shelters", "Drivers", "History", "Alerts"]
-st.session_state.page = st.radio("nav", PAGES, horizontal=True,
-                                 index=PAGES.index(st.session_state.page),
-                                 label_visibility="collapsed")
-page = st.session_state.page
-
-with st.sidebar:
-    st.markdown("### Demo controls")
-    st.session_state.use_bedrock = st.toggle(
-        "Call Bedrock agent", value=st.session_state.use_bedrock,
-        help="Off = deterministic tool pipeline only, no network call. Useful if the venue wifi is bad.")
-    st.caption(f"Leg 1 {LEG1_SECONDS:.0f}s · Leg 2 {LEG2_SECONDS:.0f}s · "
-               f"auto-accept {OFFER_SECONDS:.0f}s")
-
-
-# ---------------------------------------------------------------- flow
+# ---------------------------------------------------------------- flow (business logic — unchanged)
 def launch_rescue():
     r = st.session_state.restaurant
     text = st.session_state.food_text.strip()
@@ -319,39 +189,39 @@ def launch_rescue():
 
     st.session_state.steps = []
     st.session_state.agent_reply = ""
-    step("user → agent", "Rescue request received", f'"{text}"\nfrom {r["name"]}', BRAND)
+    step("user → agent", "Rescue request received", f'"{text}"\nfrom {r["name"]}', "brand")
 
     safety = json.loads(analyze_food_safety(text))
     step("tool · analyze_food_safety", "Food classified",
          f'temperature: {"hot" if safety["needs_hot"] else "cold"}\n'
          f'category: {safety["category"]}\n'
          f'weight_kg: {safety["weight_kg"]}\n'
-         f'fsa_window_min: {safety["fsa_window_minutes"]}', AMBER)
+         f'fsa_window_min: {safety["fsa_window_minutes"]}', "amber")
 
     shelter = json.loads(find_eligible_shelter(
         safety["needs_hot"], safety["needs_meat"], safety["needs_drinks"],
         r["lat"], r["lng"]))
     if shelter.get("error"):
-        step("tool · find_eligible_shelter", "No eligible shelter", shelter["error"], RED)
-        notify("Match failed", shelter["error"], "system", RED)
+        step("tool · find_eligible_shelter", "No eligible shelter", shelter["error"], "red")
+        notify("Match failed", shelter["error"], "system", "red")
         return
     free = shelter["capacity_meals"] - shelter["current_intake_meals"]
     step("tool · find_eligible_shelter", "Shelter matched",
          f'{shelter["id"]} — {shelter["name"]}\n'
          f'accepts_hot: {shelter["accepts_hot_food"]} · accepts_meat: {shelter["accepts_meat"]}\n'
-         f'demand {shelter["demand_score"]}/5 · {free} meals of headroom', VIOLET)
+         f'demand {shelter["demand_score"]}/5 · {free} meals of headroom', "violet")
 
     bc = json.loads(broadcast_rescue(shelter["id"], safety["needs_hot"], safety["needs_meat"],
                                      safety["weight_kg"], r["lat"], r["lng"], 3))
     if bc.get("error"):
-        step("tool · broadcast_rescue", "No capable driver on shift", bc["error"], RED)
-        notify("Dispatch failed", bc["error"], "system", RED)
+        step("tool · broadcast_rescue", "No capable driver on shift", bc["error"], "red")
+        notify("Dispatch failed", bc["error"], "system", "red")
         return
 
     offers = [{**o, "status": "pending"} for o in bc["offered"]]
     step("tool · broadcast_rescue", f'Broadcast to {len(offers)} nearest capable drivers',
          "\n".join(f'{o["name"]:<18}{VEH.get(o["vehicle_type"], ""):<8}'
-                   f'{o["distance_km"]:.1f} km · {o["max_capacity_kg"]} kg' for o in offers), GREEN)
+                   f'{o["distance_km"]:.1f} km · {o["max_capacity_kg"]} kg' for o in offers), "green")
 
     st.session_state.delivery = {
         "restaurant": r, "shelter": shelter, "safety": safety, "food_text": text,
@@ -360,7 +230,7 @@ def launch_rescue():
     }
     notify("New rescue offer",
            f'{safety["weight_kg"]} kg from {r["name"]} → {shelter["name"]}. '
-           f'Offered to {len(offers)} drivers.', "driver", BRAND)
+           f'Offered to {len(offers)} drivers.', "driver", "brand")
 
     if st.session_state.use_bedrock:
         try:
@@ -369,12 +239,10 @@ def launch_rescue():
                     f'Surplus food at {r["name"]} ({r["address"]}), '
                     f'coordinates {r["lat"]}, {r["lng"]}. The manager says: "{text}"'))
             st.session_state.agent_reply = reply
-            step("agent → user", "Summary", reply.strip()[:900], BRAND)
+            step("agent → user", "Summary", reply.strip()[:900], "brand")
         except Exception as e:
             step("agent → user", "Bedrock unavailable",
-                 f"{e}\nfalling back to the deterministic tool pipeline", RED)
-
-    st.session_state.page = "Live Tracking"
+                 f"{e}\nfalling back to the deterministic tool pipeline", "red")
 
 
 def do_accept(driver_id):
@@ -386,7 +254,7 @@ def do_accept(driver_id):
         return
     res = json.loads(accept_rescue(driver_id))
     if res.get("error"):
-        notify("Offer already taken", res["error"], "driver", RED)
+        notify("Offer already taken", res["error"], "driver", "red")
         return
 
     for o in d["offers"]:
@@ -394,10 +262,10 @@ def do_accept(driver_id):
     d["winner"] = won
 
     step("driver → agent", "Offer accepted",
-         f'{won["name"]} accepted\nother {len(d["offers"]) - 1} offers withdrawn', GREEN)
+         f'{won["name"]} accepted\nother {len(d["offers"]) - 1} offers withdrawn', "green")
     notify("Driver assigned",
            f'{won["name"]} accepted and is heading to {d["restaurant"]["name"]}.',
-           "manager", GREEN)
+           "manager", "green")
 
     r, s = d["restaurant"], d["shelter"]
     leg1 = get_route((won["current_lat"], won["current_lng"]), (r["lat"], r["lng"]), won["vehicle_type"])
@@ -407,7 +275,7 @@ def do_accept(driver_id):
     step("tool · route_lookup", "Road route resolved",
          f'leg 1 pickup: {leg1["km"]:.1f} km · ~{leg1["minutes"]} min\n'
          f'leg 2 delivery: {leg2["km"]:.1f} km · ~{leg2["minutes"]} min\n'
-         f'source: {leg1["source"]}', BRAND)
+         f'source: {leg1["source"]}', "brand")
 
     d["phase"] = "to_pickup"
     d["leg"] = 0
@@ -420,10 +288,10 @@ def do_arrive():
     d["t0"] = time.time()
     step("event · driver_arrived", "Driver at pickup point",
          f'{d["winner"]["name"]} arrived at {d["restaurant"]["name"]}\n'
-         f'awaiting handover confirmation', GREEN)
+         f'awaiting handover confirmation', "green")
     notify(f'{d["winner"]["name"]} has arrived',
            f'Waiting at {d["restaurant"]["name"]} — hand over the food and confirm.',
-           "manager", BRAND)
+           "manager", "brand")
 
 
 def do_handover():
@@ -436,9 +304,9 @@ def do_handover():
     bag = " into thermal bag" if d["winner"].get("has_thermal_bag") else ""
     step("event · food_collected", "Handover confirmed",
          f'{d["safety"]["weight_kg"]} kg loaded{bag}\n'
-         f'FSA window: {d["safety"]["fsa_window_minutes"]} min', AMBER)
+         f'FSA window: {d["safety"]["fsa_window_minutes"]} min', "amber")
     notify("Food collected", f'{d["winner"]["name"]} is en route to {d["shelter"]["name"]}.',
-           "driver", GREEN)
+           "driver", "green")
 
 
 def do_deliver():
@@ -461,9 +329,9 @@ def do_deliver():
         "meals": meals, "co2": f"{co2} kg", "shelter": s["name"],
     })
     step("event · delivered", "Delivery complete",
-         f'{meals} meals logged at {s["name"]}\n{co2} kg CO₂e avoided', GREEN)
+         f'{meals} meals logged at {s["name"]}\n{co2} kg CO₂e avoided', "green")
     notify("Delivered", f'{s["name"]} signed for {meals} meals. {w["name"]} is back on shift.',
-           "manager", GREEN)
+           "manager", "green")
     d["phase"] = "delivered"
     load.clear()
 
@@ -521,10 +389,10 @@ def build_map(progress):
         if dr.get("current_lat") is None or dr["id"] == winner_id:
             continue
         on = dr.get("status") == "available"
-        colour = GREEN if on else "#B9AE9C"
+        colour = MAP_GREEN if on else "#B9AE9C"
         folium.CircleMarker(
             [dr["current_lat"], dr["current_lng"]], radius=5 if on else 4,
-            color="#0E1013", weight=1.5, fill=True, fill_color=colour,
+            color=MAP_INK, weight=1.5, fill=True, fill_color=colour,
             fill_opacity=0.5 if dim else 1.0,
             tooltip=f'{dr["name"]} · {VEH.get(dr["vehicle_type"], "")} · {dr["status"].replace("_", " ")}',
         ).add_to(m)
@@ -536,19 +404,19 @@ def build_map(progress):
     if d["legs"]:
         folium.PolyLine(d["legs"][0]["coords"], color="#8A8072", weight=4,
                         opacity=0.7, dash_array="7,8").add_to(m)
-        folium.PolyLine(d["legs"][1]["coords"], color=BRAND, weight=5, opacity=0.95).add_to(m)
+        folium.PolyLine(d["legs"][1]["coords"], color=MAP_BRAND, weight=5, opacity=0.95).add_to(m)
 
     def square(latlng, colour, label, tip):
         folium.Marker(
             latlng, tooltip=tip,
             icon=DivIcon(icon_size=(34, 34), icon_anchor=(17, 17), html=(
                 f'<div style="width:32px;height:32px;border-radius:7px;background:{colour};'
-                f'border:2px solid #0E1013;box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;'
-                f'place-items:center;font:700 10px/1 sans-serif;color:#0E1013">{label}</div>')),
+                f'border:2px solid {MAP_INK};box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;'
+                f'place-items:center;font:700 10px/1 sans-serif;color:{MAP_INK}">{label}</div>')),
         ).add_to(m)
 
-    square([r["lat"], r["lng"]], BRAND, "P", r["name"])
-    square([s["lat"], s["lng"]], VIOLET, "S", s["name"])
+    square([r["lat"], r["lng"]], MAP_BRAND, "P", r["name"])
+    square([s["lat"], s["lng"]], MAP_VIOLET, "S", s["name"])
 
     w = d.get("winner")
     if w:
@@ -562,17 +430,12 @@ def build_map(progress):
             pos = (s["lat"], s["lng"])
         else:
             pos = (w["current_lat"], w["current_lng"])
-
-        if pos is None:
-            pos = (w["current_lat"], w["current_lng"])
-
-        lat, lng = pos
         folium.Marker(
-            [lat, lng], tooltip=f'{w["name"]} · {VEH.get(w["vehicle_type"], "")}',
+            list(pos), tooltip=f'{w["name"]} · {VEH.get(w["vehicle_type"], "")}',
             icon=DivIcon(icon_size=(40, 40), icon_anchor=(20, 20), html=(
-                f'<div style="width:30px;height:30px;border-radius:50%;background:{BRAND};'
-                f'border:2.5px solid #0E1013;box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;'
-                f'place-items:center;font:700 8px/1 sans-serif;color:#0E1013">'
+                f'<div style="width:30px;height:30px;border-radius:50%;background:{MAP_BRAND};'
+                f'border:2.5px solid {MAP_INK};box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;'
+                f'place-items:center;font:700 8px/1 sans-serif;color:{MAP_INK}">'
                 f'{VEH.get(w["vehicle_type"], "DRV")}</div>')),
         ).add_to(m)
 
@@ -583,114 +446,103 @@ def build_map(progress):
     return m
 
 
-def timeline_html(stage_idx):
-    cells = []
-    for i, label in enumerate(STAGES):
-        done = i <= stage_idx
-        cells.append(
-            f'<div style="flex:1;min-width:0">'
-            f'<div style="display:flex;align-items:center">'
-            f'<span style="width:12px;height:12px;border-radius:50%;flex:none;'
-            f'background:{BRAND if done else "#fff"};border:2px solid {BRAND if done else "#DED5C6"}"></span>'
-            f'<span style="flex:1;height:2px;background:{BRAND if i < stage_idx else "#EDE6DA"}"></span></div>'
-            f'<div style="font-size:10.5px;font-weight:600;line-height:1.25;padding-right:8px;'
-            f'margin-top:6px;color:{"#4A4238" if done else "#A79C8C"}">{label}</div></div>')
-    return f'<div style="display:flex;margin:16px 0 2px">{"".join(cells)}</div>'
+# ---------------------------------------------------------------- native render helpers
+def render_timeline(stage_idx):
+    cols = st.columns(len(STAGES))
+    for i, (col, label) in enumerate(zip(cols, STAGES)):
+        mark = "✅" if i <= stage_idx else "⚪"
+        col.caption(f"{mark} {label}")
 
 
-def brain_html():
-    if not st.session_state.steps:
-        return (f'<div class="ra-brain"><div class="hd">Agent reasoning</div>'
-                f'<div class="sub">strands · tool calls and returns</div>'
-                f'<div class="ra-empty">Idle. All {len(DRV)} drivers are plotted on the map with '
-                f'their current positions. Send a rescue to start the trace.</div></div>')
-    rows = []
-    for s in st.session_state.steps:
-        body = f'<div class="bd">{s["body"]}</div>' if s["body"] else ""
-        rows.append(
-            f'<div class="ra-stepbox" style="border-left:2px solid {s["color"]}">'
-            f'<div style="display:flex;gap:9px"><span class="k" style="color:{s["color"]};'
-            f'filter:brightness(1.6);flex:1;overflow:hidden;text-overflow:ellipsis;'
-            f'white-space:nowrap">{s["kind"]}</span>'
-            f'<span class="k" style="color:#6F6557;flex:none">{s["t"]}</span></div>'
-            f'<div class="ti">{s["title"]}</div>{body}</div>')
-    return (f'<div class="ra-brain"><div class="hd">Agent reasoning</div>'
-            f'<div class="sub">strands · tool calls and returns</div>{"".join(rows)}</div>')
+_KIND_AVATAR = {"user → agent": "🧑", "agent → user": "🤖", "driver → agent": "🛵"}
+
+
+def _avatar_for(kind):
+    if kind in _KIND_AVATAR:
+        return _KIND_AVATAR[kind]
+    if kind.startswith("tool"):
+        return "🛠️"
+    if kind.startswith("event"):
+        return "⚡"
+    return "💬"
+
+
+def render_brain():
+    st.subheader("Agent reasoning")
+    st.caption("strands · tool calls and returns")
+    with st.container(height=460, border=True):
+        if not st.session_state.steps:
+            st.info(f"Idle. All {len(DRV)} drivers are plotted on the map with their current "
+                    "positions. Send a rescue to start the trace.")
+            return
+        for s in st.session_state.steps:
+            with st.chat_message(name=s["kind"], avatar=_avatar_for(s["kind"])):
+                st.caption(f'{s["kind"]} · {s["t"]}')
+                st.markdown(f"**{s['title']}**")
+                if s["body"]:
+                    st.code(s["body"], language=None)
 
 
 # ---------------------------------------------------------------- pages
-if page == "Dashboard":
+def render_dashboard():
     c1, c2 = st.columns([4, 1])
     with c1:
-        st.markdown("# Dashboard")
+        st.header("Dashboard")
         st.caption("Session totals. Counters move only as the agent completes work.")
     with c2:
-        if st.button("New rescue", type="primary", use_container_width=True):
-            st.session_state.page = "New Rescue"
-            st.rerun()
+        if st.button("New rescue", type="primary", width="stretch"):
+            st.switch_page(page_new_rescue)
 
     s = st.session_state.stats
-    cols = st.columns(4)
-    for col, (label, val) in zip(cols, [
-            ("Rescues completed", f'{s["rescues"]}'),
-            ("Meals delivered", f'{s["meals"]}'),
-            ("Food rescued", f'{s["kg"]:.1f}<small> kg</small>'),
-            ("CO₂ avoided", f'<span style="color:{GREEN}">{s["co2"]:.1f}<small> kg</small></span>')]):
-        col.markdown(f'<div class="ra-card"><div class="ra-label">{label}</div>'
-                     f'<div class="ra-num">{val}</div></div>', unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Rescues completed", s["rescues"], border=True)
+    m2.metric("Meals delivered", s["meals"], border=True)
+    m3.metric("Food rescued", f'{s["kg"]:.1f} kg', border=True)
+    m4.metric("CO₂ avoided", f'{s["co2"]:.1f} kg', border=True)
 
     left, right = st.columns([1.6, 1])
     with left:
-        active = 1 if st.session_state.delivery and st.session_state.delivery["phase"] not in ("delivered",) else 0
-        net = [(f"{len(RESTAURANTS):,}", "Partner restaurants", BRAND),
-               (f"{len(SHELTERS)}", "Shelters & larders", AMBER),
-               (f'{len(AVAIL)}<span style="font-size:15px;color:#A79C8C">/{len(DRV)}</span>',
-                "Drivers on shift", GREEN),
-               (f"{active}", "In flight", RED)]
-        inner = "".join(
-            f'<div style="border-left:2px solid {c};padding-left:13px">'
-            f'<div style="font-family:\'Bricolage Grotesque\',sans-serif;font-size:26px;'
-            f'font-weight:600;letter-spacing:-.8px">{v}</div>'
-            f'<div style="font-size:12.5px;color:#7A7065;margin-top:2px">{l}</div></div>'
-            for v, l, c in net)
-        st.markdown(
-            f'<div class="ra-card"><div class="ra-label">Network</div>'
-            f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:14px">{inner}</div>'
-            f'<div style="margin-top:18px;padding-top:14px;border-top:1px solid #F0EAE0;'
-            f'font-size:13.5px;color:#6E6559;line-height:1.6;max-width:64ch">'
-            f'A manager describes surplus food in plain English. The agent classifies it against '
-            f'FSA thermal rules, matches a shelter that accepts it, then broadcasts the job to the '
-            f'three nearest capable drivers. The first to accept gets the route.</div></div>',
-            unsafe_allow_html=True)
+        active = 1 if st.session_state.delivery and st.session_state.delivery["phase"] != "delivered" else 0
+        with st.container(border=True):
+            st.caption("Network")
+            n1, n2, n3, n4 = st.columns(4)
+            n1.metric("Partner restaurants", f"{len(RESTAURANTS):,}")
+            n2.metric("Shelters & larders", len(SHELTERS))
+            n3.metric("Drivers on shift", f"{len(AVAIL)}/{len(DRV)}")
+            n4.metric("In flight", active)
+            st.divider()
+            st.write(
+                "A manager describes surplus food in plain English. The agent classifies it "
+                "against FSA thermal rules, matches a shelter that accepts it, then broadcasts "
+                "the job to the three nearest capable drivers. The first to accept gets the route."
+            )
     with right:
-        if st.session_state.history:
-            rows = "".join(
-                f'<div style="border-top:1px solid #F0EAE0;padding-top:11px;margin-top:11px">'
-                f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:#A65524">{h["time"]}</div>'
-                f'<div style="font-size:13.5px;font-weight:600;margin-top:3px">{h["food"][:70]}</div>'
-                f'<div style="font-size:12.5px;color:#8A8072">{h["shelter"]}</div></div>'
-                for h in st.session_state.history[:3])
-        else:
-            rows = ('<div style="border:1px dashed #DED5C6;border-radius:8px;padding:22px 16px;'
-                    'color:#9A9082;font-size:13px;line-height:1.55;margin-top:12px">'
-                    'Nothing rescued yet. Open <b>New Rescue</b> and describe what is left over.</div>')
-        st.markdown(f'<div class="ra-card"><div class="ra-label">Recent this session</div>{rows}</div>',
-                    unsafe_allow_html=True)
+        with st.container(border=True):
+            st.caption("Recent this session")
+            if st.session_state.history:
+                for i, h in enumerate(st.session_state.history[:3]):
+                    st.markdown(f"**{h['food'][:70]}**")
+                    st.caption(f"{h['time']} · {h['shelter']}")
+                    if i < 2:
+                        st.divider()
+            else:
+                st.info("Nothing rescued yet. Open **New Rescue** and describe what is left over.")
 
 
-elif page == "New Rescue":
-    st.markdown("# New rescue")
+def render_new_rescue():
+    st.header("New rescue")
     st.caption("Pick the pickup kitchen, describe the surplus. The agent handles safety, shelter and driver.")
 
     left, right = st.columns([1.4, 1], gap="medium")
     with left:
-        st.markdown('<div class="ra-label">1 · Pickup kitchen</div>', unsafe_allow_html=True)
+        st.markdown("**1 · Pickup kitchen**")
         if st.session_state.restaurant:
             r = st.session_state.restaurant
             cc1, cc2 = st.columns([4, 1])
-            cc1.markdown(f'**{r["name"]}**  \n<span style="font-size:12.5px;color:#7A7065">{r["address"]}</span>',
-                         unsafe_allow_html=True)
-            if cc2.button("Change", use_container_width=True):
+            with cc1:
+                st.markdown(f"**{r['name']}**")
+                st.caption(r["address"])
+            if cc2.button("Change", width="stretch"):
                 st.session_state.restaurant = None
                 st.rerun()
         else:
@@ -712,35 +564,36 @@ elif page == "New Rescue":
                     for r in hits[:60]:
                         cuisine = f' · {r["cuisine"].replace("_", " ")}' if r.get("cuisine") else ""
                         if st.button(f'{r["name"]}  —  {r.get("address", "")}{cuisine}',
-                                     key=f'pick_{r["id"]}', use_container_width=True):
+                                     key=f'pick_{r["id"]}', width="stretch"):
                             st.session_state.restaurant = r
                             st.rerun()
             else:
                 st.caption(f"{len(RESTAURANTS):,} restaurants in the OSM set. "
                            f"Type any part of a name — Awaafi, Dishoom, Gorgie.")
 
-        st.markdown('<div class="ra-label" style="margin-top:14px">2 · Surplus food</div>',
-                    unsafe_allow_html=True)
+        st.markdown("**2 · Surplus food**")
         st.session_state.food_text = st.text_area(
             "food", value=st.session_state.food_text, height=112,
             placeholder="e.g. 5 kg hot chicken biryani and 2 kg garlic naan, needs collecting within the hour",
             label_visibility="collapsed")
 
         p1, p2, p3 = st.columns(3)
-        if p1.button("Hot curry, 6 kg", use_container_width=True):
+        if p1.button("Hot curry, 6 kg", width="stretch"):
             st.session_state.food_text = ("6 kg hot chicken curry and rice, cooked 40 minutes ago, "
                                           "needs collecting soon")
             st.rerun()
-        if p2.button("Chilled sandwiches", use_container_width=True):
+        if p2.button("Chilled sandwiches", width="stretch"):
             st.session_state.food_text = "3 kg chilled sandwiches and salad boxes from the counter"
             st.rerun()
-        if p3.button("Bakery, end of day", use_container_width=True):
+        if p3.button("Bakery, end of day", width="stretch"):
             st.session_state.food_text = "12 loaves and 20 pastries, ambient, end of day"
             st.rerun()
 
-        if st.button("Send to agent", type="primary", use_container_width=True):
+        if st.button("Send to agent", type="primary", width="stretch"):
             launch_rescue()
-            st.rerun()
+            dd = st.session_state.delivery
+            if dd and dd["phase"] == "broadcast":
+                st.switch_page(page_live_tracking)
         st.caption("Broadcasts to the 3 nearest capable drivers. First to accept takes the job.")
 
     with right:
@@ -750,34 +603,35 @@ elif page == "New Rescue":
         if sf["needs_meat"]:
             reqs.append("Accepts meat")
         reqs.append("Status: available")
-        rows = [("Temperature class", "Hot / cooked" if sf["needs_hot"] else "Cold / ambient"),
-                ("Category", sf["category"].title()),
-                ("Estimated weight", f'{sf["weight_kg"]} kg'),
-                ("FSA handover window", f'{sf["fsa_window_minutes"]} min')]
-        body = "".join(
-            f'<div style="display:flex;justify-content:space-between;gap:12px;font-size:13.5px;'
-            f'border-bottom:1px solid #F4EFE6;padding:8px 0"><span style="color:#7A7065">{k}</span>'
-            f'<span style="font-weight:600">{v}</span></div>' for k, v in rows)
-        st.markdown(f'<div class="ra-card"><div class="ra-label">Pre-flight read</div>{body}'
-                    f'<div style="margin-top:12px;font-size:12.5px;color:#7A7065;line-height:1.55">'
-                    f'{sf["safety_note"]}</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="ra-card"><div class="ra-label">Driver requirements implied</div>'
-                    f'<div style="margin-top:10px">'
-                    f'{"".join(f"<span class=ra-chip>{x}</span>" for x in reqs)}</div></div>',
-                    unsafe_allow_html=True)
+
+        with st.container(border=True):
+            st.caption("Pre-flight read")
+            st.dataframe(
+                {"Property": ["Temperature class", "Category", "Estimated weight", "FSA handover window"],
+                 "Value": ["Hot / cooked" if sf["needs_hot"] else "Cold / ambient",
+                           sf["category"].title(), f'{sf["weight_kg"]} kg',
+                           f'{sf["fsa_window_minutes"]} min']},
+                hide_index=True, width="stretch")
+            st.caption(sf["safety_note"])
+
+        with st.container(border=True):
+            st.caption("Driver requirements implied")
+            with st.container(horizontal=True):
+                for x in reqs:
+                    st.badge(x, color="gray")
 
 
-elif page == "Live Tracking":
+def render_live_tracking():
     d = st.session_state.delivery
     head1, head2 = st.columns([4, 1.1])
     with head1:
-        st.markdown("# Live tracking")
+        st.header("Live tracking")
         if d:
             st.caption(f'{d["restaurant"]["name"]} → {d["shelter"]["name"]} · {d["phase"].replace("_", " ")}')
         else:
             st.caption(f"All {len(DRV)} drivers shown at their current positions. Nothing dispatched yet.")
     with head2:
-        if st.button("Reset demo", use_container_width=True):
+        if st.button("Reset demo", width="stretch"):
             reset_demo()
             st.rerun()
 
@@ -789,17 +643,16 @@ elif page == "Live Tracking":
 
         col_brain, col_map = st.columns([1, 2.1], gap="small")
         with col_brain:
-            st.markdown(brain_html(), unsafe_allow_html=True)
+            render_brain()
         with col_map:
-            # HUD
             if not dd:
-                hud = ("Fleet standby", f"{len(AVAIL)}", "drivers on shift",
+                hud = ("Fleet standby", len(AVAIL), "drivers on shift",
                        f"{len(DRV)} plotted across Edinburgh", 0)
             elif dd["phase"] == "broadcast":
-                hud = ("Dispatching", f'{len(dd["offers"])}', "offers open",
+                hud = ("Dispatching", len(dd["offers"]), "offers open",
                        "Waiting for a driver to accept", 6)
             elif dd["phase"] == "at_pickup":
-                hud = ("At the kitchen", "0", "min away",
+                hud = ("At the kitchen", 0, "min away",
                        f'{dd["winner"]["name"]} is waiting for handover', 50)
             elif dd["phase"] == "delivered":
                 hud = ("Delivered", "✓", "", "Route complete", 100)
@@ -812,156 +665,127 @@ elif page == "Live Tracking":
                        "<1" if remaining_min < 1 else f"{int(round(remaining_min))}", "min",
                        f'{remaining_km:.1f} km remaining of {leg["km"]:.1f} km', pct)
 
-            st.markdown(
-                f'<div class="ra-hud"><div class="ra-label">{hud[0]}</div>'
-                f'<div style="display:flex;align-items:baseline;gap:7px;margin-top:3px">'
-                f'<span class="v">{hud[1]}</span>'
-                f'<span style="font-size:12.5px;color:#7A7065;font-weight:600">{hud[2]}</span></div>'
-                f'<div style="margin-top:6px;font-size:12.5px;color:#6E6559">{hud[3]}</div>'
-                f'<div class="ra-bar"><i style="width:{hud[4]}%"></i></div></div>',
-                unsafe_allow_html=True)
-            st_folium(build_map(progress), height=460, use_container_width=True,
+            st.metric(hud[0], f"{hud[1]} {hud[2]}".strip(), border=True)
+            st.progress(min(100, max(0, hud[4])) / 100, text=hud[3])
+            st_folium(build_map(progress), height=420, width="stretch",
                       returned_objects=[], key="tracking_map")
 
-        # --- role strips -------------------------------------------------
         ph = dd["phase"] if dd else "idle"
         mgr_active = ph in ("at_pickup", "delivered", "to_pickup")
         drv_active = ph in ("broadcast", "to_shelter")
         m_col, d_col = st.columns(2, gap="small")
 
         with m_col:
-            cls = "ra-card active-mgr" if mgr_active else "ra-card"
-            texts = {
-                "idle": ("No open rescue", "Send a request from New Rescue to begin."),
-                "broadcast": ("Looking for a driver",
-                              "Offer is out to the three nearest capable volunteers."),
-                "to_pickup": (f'{dd["winner"]["name"]} is on the way to you' if dd and dd.get("winner") else "Driver on the way",
-                              f'Destination after pickup: {dd["shelter"]["name"]}.' if dd else ""),
-                "at_pickup": (f'{dd["winner"]["name"]} is outside' if dd and dd.get("winner") else "Driver has arrived",
-                              "Hand the food over and confirm below to release the driver."),
-                "to_shelter": ("Food is in transit",
-                               f'Heading to {dd["shelter"]["name"]}.' if dd else ""),
-                "delivered": ("Rescue complete",
-                              f'{dd["shelter"]["name"]} has signed for the load.' if dd else ""),
-            }[ph]
-            stage_idx = {"idle": -1, "broadcast": 0, "to_pickup": 1, "at_pickup": 2,
-                         "to_shelter": 3, "delivered": 4}[ph]
-            st.markdown(
-                f'<div class="{cls}"><div style="display:flex;justify-content:space-between">'
-                f'<span class="ra-label">Restaurant manager</span>'
-                f'<span style="font-size:11px;font-weight:700;letter-spacing:.06em;'
-                f'text-transform:uppercase;color:{BRAND if mgr_active else MUTED}">'
-                f'{ph.replace("_", " ")}</span></div>'
-                f'<div style="font-size:15px;font-weight:600;margin-top:10px">{texts[0]}</div>'
-                f'<div style="font-size:13px;color:#7A7065;margin-top:3px">{texts[1]}</div>'
-                f'{timeline_html(stage_idx)}</div>', unsafe_allow_html=True)
-            if ph == "at_pickup":
-                if st.button("Food handed over — release driver", type="primary",
-                             use_container_width=True, key="handover"):
-                    do_handover()
-                    st.rerun(scope="fragment")
-            if ph == "delivered" and st.session_state.history:
-                h = st.session_state.history[0]
-                st.success(f'**{h["meals"]} meals logged** — {h["summary"]} · {h["co2"]} CO₂e avoided')
-
-        with d_col:
-            cls = "ra-card active-drv" if drv_active else "ra-card"
-            st.markdown(
-                f'<div class="{cls}"><div style="display:flex;justify-content:space-between">'
-                f'<span class="ra-label">Driver app</span>'
-                f'<span style="font-size:11px;font-weight:700;letter-spacing:.06em;'
-                f'text-transform:uppercase;color:{"#221E19" if drv_active else MUTED}">'
-                f'{"offer open" if ph == "broadcast" else ph.replace("_", " ")}</span></div>',
-                unsafe_allow_html=True)
-            if not dd:
-                st.markdown(f'<div style="border:1px dashed #DED5C6;border-radius:8px;padding:22px 16px;'
-                            f'color:#9A9082;font-size:13px">No open offers. {len(AVAIL)} drivers are '
-                            f'on shift waiting for a job.</div></div>', unsafe_allow_html=True)
-            elif ph == "broadcast":
-                st.markdown("</div>", unsafe_allow_html=True)
-                for o in dd["offers"]:
-                    oc1, oc2 = st.columns([4, 1])
-                    oc1.markdown(
-                        f'<div style="font-size:14.5px;font-weight:600">{o["name"]} '
-                        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;'
-                        f'background:#F1EAE0;border-radius:4px;padding:2px 6px;color:#6E6559">'
-                        f'{VEH.get(o["vehicle_type"], "")}</span></div>'
-                        f'<div style="font-size:12px;color:#7A7065">{o["distance_km"]:.1f} km away · '
-                        f'{o["max_capacity_kg"]} kg · {o["neighbourhood"]} · {o["rating"]}★</div>',
-                        unsafe_allow_html=True)
-                    if o["status"] == "pending":
-                        if oc2.button("Accept", key=f'acc_{o["driver_id"]}', use_container_width=True):
-                            do_accept(o["driver_id"])
-                            st.rerun(scope="fragment")
-                    else:
-                        oc2.markdown("**Accepted**" if o["status"] == "won" else "Taken")
-                st.caption("Tap Accept on any driver, or wait — the nearest one takes it automatically.")
-            else:
-                w = dd["winner"]
-                instr = {"to_pickup": ("Head to the pickup",
-                                       f'{dd["restaurant"]["name"]} — {dd["restaurant"]["address"]}'),
-                         "at_pickup": ("You have arrived", "Collect the food from the kitchen team."),
-                         "to_shelter": ("Deliver the load",
-                                        f'{dd["shelter"]["name"]} — {dd["shelter"]["address"]}'),
-                         "delivered": ("Job done", "You are back on the available roster.")}[ph]
-                bag = " · thermal bag" if w.get("has_thermal_bag") else ""
-                st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:13px;border:1px solid #EFE8DD;'
-                    f'border-radius:8px;padding:12px 14px;margin-top:10px">'
-                    f'<div style="width:40px;height:40px;border-radius:50%;background:#221E19;color:#fff;'
-                    f'display:grid;place-items:center;font-weight:600;flex:none">'
-                    f'{"".join(x[0] for x in w["name"].split()[:2])}</div>'
-                    f'<div style="flex:1"><div style="font-size:15px;font-weight:600">{w["name"]}</div>'
-                    f'<div style="font-size:12.5px;color:#7A7065">{VEH.get(w["vehicle_type"], "")} · '
-                    f'{w.get("vehicle_reg", "")} · {w["neighbourhood"]} · {w["max_capacity_kg"]} kg{bag}</div></div>'
-                    f'<div style="text-align:right"><div style="font-family:\'Bricolage Grotesque\','
-                    f'sans-serif;font-size:19px;font-weight:600">{w["rating"]}</div>'
-                    f'<div style="font-size:10.5px;color:#9A9082">rating</div></div></div>'
-                    f'<div style="margin-top:11px;font-size:13.5px;font-weight:600;color:#4A4238">{instr[0]}</div>'
-                    f'<div style="font-size:12.5px;color:#7A7065;margin-top:2px">{instr[1]}</div></div>',
-                    unsafe_allow_html=True)
+            with st.container(border=True):
+                top1, top2 = st.columns([3, 1])
+                top1.markdown("**Restaurant manager**")
+                with top2:
+                    st.badge(ph.replace("_", " "), color="primary" if mgr_active else "gray")
+                texts = {
+                    "idle": ("No open rescue", "Send a request from New Rescue to begin."),
+                    "broadcast": ("Looking for a driver",
+                                  "Offer is out to the three nearest capable volunteers."),
+                    "to_pickup": (f'{dd["winner"]["name"]} is on the way to you' if dd and dd.get("winner") else "Driver on the way",
+                                  f'Destination after pickup: {dd["shelter"]["name"]}.' if dd else ""),
+                    "at_pickup": (f'{dd["winner"]["name"]} is outside' if dd and dd.get("winner") else "Driver has arrived",
+                                  "Hand the food over and confirm below to release the driver."),
+                    "to_shelter": ("Food is in transit",
+                                   f'Heading to {dd["shelter"]["name"]}.' if dd else ""),
+                    "delivered": ("Rescue complete",
+                                  f'{dd["shelter"]["name"]} has signed for the load.' if dd else ""),
+                }[ph]
+                stage_idx = {"idle": -1, "broadcast": 0, "to_pickup": 1, "at_pickup": 2,
+                             "to_shelter": 3, "delivered": 4}[ph]
+                st.markdown(f"**{texts[0]}**")
+                st.caption(texts[1])
+                render_timeline(stage_idx)
                 if ph == "at_pickup":
-                    if st.button("Confirm food collected", use_container_width=True, key="drv_collect"):
+                    if st.button("Food handed over — release driver", type="primary",
+                                 width="stretch", key="handover"):
                         do_handover()
                         st.rerun(scope="fragment")
-                elif ph == "to_pickup":
-                    if st.button("Report arrival early", use_container_width=True, key="drv_arrive"):
-                        do_arrive()
-                        st.rerun(scope="fragment")
+                if ph == "delivered" and st.session_state.history:
+                    h = st.session_state.history[0]
+                    st.success(f'**{h["meals"]} meals logged** — {h["summary"]} · {h["co2"]} CO₂e avoided')
+
+        with d_col:
+            with st.container(border=True):
+                top1, top2 = st.columns([3, 1])
+                top1.markdown("**Driver app**")
+                with top2:
+                    st.badge("offer open" if ph == "broadcast" else ph.replace("_", " "),
+                            color="primary" if drv_active else "gray")
+                if not dd:
+                    st.info(f"No open offers. {len(AVAIL)} drivers are on shift waiting for a job.")
+                elif ph == "broadcast":
+                    for o in dd["offers"]:
+                        oc1, oc2 = st.columns([4, 1])
+                        with oc1:
+                            st.markdown(f'**{o["name"]}**')
+                            st.caption(f'{VEH.get(o["vehicle_type"], "")} · {o["distance_km"]:.1f} km away · '
+                                       f'{o["max_capacity_kg"]} kg · {o["neighbourhood"]} · {o["rating"]}★')
+                        with oc2:
+                            if o["status"] == "pending":
+                                if st.button("Accept", key=f'acc_{o["driver_id"]}', width="stretch"):
+                                    do_accept(o["driver_id"])
+                                    st.rerun(scope="fragment")
+                            else:
+                                st.badge("Accepted" if o["status"] == "won" else "Taken",
+                                        color="green" if o["status"] == "won" else "gray")
+                    st.caption("Tap Accept on any driver, or wait — the nearest one takes it automatically.")
+                else:
+                    w = dd["winner"]
+                    instr = {"to_pickup": ("Head to the pickup",
+                                           f'{dd["restaurant"]["name"]} — {dd["restaurant"]["address"]}'),
+                             "at_pickup": ("You have arrived", "Collect the food from the kitchen team."),
+                             "to_shelter": ("Deliver the load",
+                                            f'{dd["shelter"]["name"]} — {dd["shelter"]["address"]}'),
+                             "delivered": ("Job done", "You are back on the available roster.")}[ph]
+                    bag = " · thermal bag" if w.get("has_thermal_bag") else ""
+                    ic1, ic2 = st.columns([1, 4])
+                    with ic1:
+                        st.markdown(f"### {''.join(x[0] for x in w['name'].split()[:2])}")
+                    with ic2:
+                        st.markdown(f'**{w["name"]}**')
+                        st.caption(f'{VEH.get(w["vehicle_type"], "")} · {w.get("vehicle_reg", "")} · '
+                                   f'{w["neighbourhood"]} · {w["max_capacity_kg"]} kg{bag} · {w["rating"]}★ rating')
+                    st.markdown(f"**{instr[0]}**")
+                    st.caption(instr[1])
+                    if ph == "at_pickup":
+                        if st.button("Confirm food collected", width="stretch", key="drv_collect"):
+                            do_handover()
+                            st.rerun(scope="fragment")
+                    elif ph == "to_pickup":
+                        if st.button("Report arrival early", width="stretch", key="drv_arrive"):
+                            do_arrive()
+                            st.rerun(scope="fragment")
 
     tracking_fragment()
 
 
-elif page == "Active Deliveries":
-    st.markdown("# Active deliveries")
+def render_active_deliveries():
+    st.header("Active deliveries")
     d = st.session_state.delivery
     if d and d["phase"] in ("to_pickup", "at_pickup", "to_shelter"):
         w = d["winner"]
-        st.markdown(
-            f'<div class="ra-card" style="display:flex;gap:18px;align-items:center">'
-            f'<div class="ra-ph">food<br>photo</div>'
-            f'<div style="flex:1"><div style="font-size:16px;font-weight:600">{d["food_text"]}</div>'
-            f'<div style="font-size:13px;color:#7A7065;margin-top:3px">'
-            f'{d["restaurant"]["name"]} → {d["shelter"]["name"]}</div>'
-            f'<div style="margin-top:8px"><span class="ra-chip">{w["name"]}</span>'
-            f'<span class="ra-chip">{VEH.get(w["vehicle_type"], "")}</span>'
-            f'<span class="ra-chip">{d["safety"]["weight_kg"]} kg</span></div></div>'
-            f'<div style="text-align:right"><div style="font-size:11px;font-weight:700;'
-            f'letter-spacing:.07em;text-transform:uppercase;color:{BRAND}">'
-            f'{d["phase"].replace("_", " ")}</div></div></div>', unsafe_allow_html=True)
-        if st.button("Track", type="primary"):
-            st.session_state.page = "Live Tracking"
-            st.rerun()
+        with st.container(border=True):
+            st.markdown(f"**{d['food_text']}**")
+            st.caption(f'{d["restaurant"]["name"]} → {d["shelter"]["name"]}')
+            with st.container(horizontal=True):
+                st.badge(w["name"], color="gray")
+                st.badge(VEH.get(w["vehicle_type"], ""), color="gray")
+                st.badge(f'{d["safety"]["weight_kg"]} kg', color="gray")
+                st.badge(d["phase"].replace("_", " "), color="primary")
+            if st.button("Track", type="primary"):
+                st.switch_page(page_live_tracking)
     else:
-        st.markdown('<div class="ra-card" style="border-style:dashed;color:#9A9082;padding:44px 24px">'
-                    'Nothing in flight. A rescue appears here from dispatch until it is delivered.</div>',
-                    unsafe_allow_html=True)
+        st.info("Nothing in flight. A rescue appears here from dispatch until it is delivered.")
 
 
-elif page == "Shelters":
-    st.markdown("# Shelters & larders")
+def render_shelters():
+    st.header("Shelters & larders")
     st.caption(f"{len(SHELTERS)} registered locations across Edinburgh")
-    f1, f2, _ = st.columns([1, 1, 3])
+    f1, f2 = st.columns(2)
     hot_only = f1.toggle("Accepts hot food")
     veg_only = f2.toggle("Vegetarian options")
 
@@ -971,116 +795,128 @@ elif page == "Shelters":
     cols = st.columns(3)
     for i, s in enumerate(rows):
         demand = s.get("demand_score", 0)
-        colour = RED if demand >= 4.5 else (AMBER if demand >= 4 else GREEN)
+        color = "red" if demand >= 4.5 else ("orange" if demand >= 4 else "green")
         cap, cur = s.get("capacity_meals", 0), s.get("current_intake_meals", 0)
-        pct = int(cur / cap * 100) if cap else 0
-        tags = "".join(f'<span class="ra-chip">{t.replace("_", " ")}</span>'
-                       for t in s.get("dietary_tags", []))
-        cols[i % 3].markdown(
-            f'<div class="ra-card"><div style="display:flex;justify-content:space-between;gap:10px">'
-            f'<div style="font-size:15.5px;font-weight:600;line-height:1.3">{s["name"]}</div>'
-            f'<div style="text-align:right;flex:none"><div style="font-family:\'Bricolage Grotesque\','
-            f'sans-serif;font-size:16px;font-weight:600;color:{colour}">{demand}/5</div>'
-            f'<div style="font-size:10px;color:#9A9082;text-transform:uppercase">demand</div></div></div>'
-            f'<div style="font-size:12.5px;color:#7A7065;margin-top:5px">{s.get("address", "")}</div>'
-            f'<div style="margin-top:9px">{tags}</div>'
-            f'<div style="display:flex;justify-content:space-between;font-size:12px;color:#7A7065;'
-            f'margin-top:8px"><span>{s.get("opens_24h", "")}–{s.get("closes_24h", "")}</span>'
-            f'<span>{cur}/{cap} meals</span></div>'
-            f'<div class="ra-bar"><i style="width:{pct}%;background:{colour}"></i></div></div>',
-            unsafe_allow_html=True)
+        pct = (cur / cap) if cap else 0
+        with cols[i % 3]:
+            with st.container(border=True):
+                st.markdown(f"**{s['name']}**")
+                st.caption(s.get("address", ""))
+                st.badge(f"demand {demand}/5", color=color)
+                if s.get("dietary_tags"):
+                    with st.container(horizontal=True):
+                        for t in s["dietary_tags"]:
+                            st.badge(t.replace("_", " "), color="gray")
+                st.progress(min(1.0, pct),
+                            text=f'{cur}/{cap} meals · {s.get("opens_24h", "")}–{s.get("closes_24h", "")}')
 
 
-elif page == "Drivers":
-    st.markdown("# Volunteer drivers")
-    choice = st.radio("filter", ["All", "Available", "Busy", "Off duty"],
-                      horizontal=True, label_visibility="collapsed")
+def render_drivers():
+    st.header("Volunteer drivers")
+    choice = st.segmented_control("filter", ["All", "Available", "Busy", "Off duty"],
+                                  default="All", label_visibility="collapsed")
     key = {"Available": "available", "Busy": "busy", "Off duty": "off_duty"}.get(choice)
     rows = [d for d in DRV if key is None or d.get("status") == key]
     st.caption(f"{len(rows)} of {len(DRV)} drivers")
     cols = st.columns(3)
     for i, d in enumerate(rows):
         status = d.get("status", "")
-        dot = GREEN if status == "available" else (BRAND if status == "busy" else "#B9AE9C")
+        badge_color = "green" if status == "available" else ("primary" if status == "busy" else "gray")
         kit = ("Thermal bag" if d.get("has_thermal_bag")
                else ("Cool box" if d.get("has_cool_box") else "No thermal kit"))
-        cols[i % 3].markdown(
-            f'<div class="ra-card"><div style="display:flex;align-items:center;gap:12px">'
-            f'<div style="width:38px;height:38px;border-radius:50%;background:#F1EAE0;'
-            f'display:grid;place-items:center;font-family:\'Bricolage Grotesque\',sans-serif;'
-            f'font-weight:600;flex:none">{"".join(x[0] for x in d["name"].split()[:2])}</div>'
-            f'<div style="flex:1"><div style="font-size:15px;font-weight:600">{d["name"]}</div>'
-            f'<div style="font-size:12px;color:#7A7065"><span style="display:inline-block;width:7px;'
-            f'height:7px;border-radius:50%;background:{dot};margin-right:5px"></span>'
-            f'{status.replace("_", " ")} · {d.get("neighbourhood", "")}</div></div>'
-            f'<div style="text-align:right"><div style="font-family:\'Bricolage Grotesque\',sans-serif;'
-            f'font-size:17px;font-weight:600">{d.get("rating", "")}</div>'
-            f'<div style="font-size:10px;color:#9A9082">rating</div></div></div>'
-            f'<div style="margin-top:11px"><span class="ra-chip">{VEH.get(d.get("vehicle_type"), "")}</span>'
-            f'<span class="ra-chip">Max {d.get("max_capacity_kg", "?")} kg</span>'
-            f'<span class="ra-chip">{kit}</span>'
-            f'<span class="ra-chip">ETA {d.get("eta_minutes", "?")} min</span></div></div>',
-            unsafe_allow_html=True)
+        with cols[i % 3]:
+            with st.container(border=True):
+                top1, top2 = st.columns([3, 1])
+                with top1:
+                    st.markdown(f"**{d['name']}**")
+                    st.caption(f'{d.get("neighbourhood", "")} · {d.get("rating", "")}★')
+                with top2:
+                    st.badge(status.replace("_", " "), color=badge_color)
+                with st.container(horizontal=True):
+                    st.badge(VEH.get(d.get("vehicle_type"), ""), color="gray")
+                    st.badge(f'Max {d.get("max_capacity_kg", "?")} kg', color="gray")
+                    st.badge(kit, color="gray")
+                    st.badge(f'ETA {d.get("eta_minutes", "?")} min', color="gray")
 
 
-elif page == "History":
+def render_history():
     h1, h2 = st.columns([4, 1])
     with h1:
-        st.markdown("# Session history")
+        st.header("Session history")
         st.caption("Rescues completed in this session")
     with h2:
-        if st.button("Clear history", use_container_width=True):
+        if st.button("Clear history", width="stretch"):
             st.session_state.history = []
             st.session_state.stats = {"rescues": 0, "meals": 0, "kg": 0.0, "co2": 0.0}
             st.rerun()
 
     if not st.session_state.history:
-        st.markdown('<div class="ra-card" style="border-style:dashed;color:#9A9082;padding:44px 24px">'
-                    'No rescues logged yet this session.</div>', unsafe_allow_html=True)
-    for h in st.session_state.history:
-        st.markdown(
-            f'<div class="ra-card" style="display:flex;gap:18px;align-items:center">'
-            f'<div class="ra-ph">food<br>photo</div>'
-            f'<div style="flex:1"><div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;'
-            f'color:#A65524">{h["time"]} · {h["id"]}</div>'
-            f'<div style="font-size:15.5px;font-weight:600;margin-top:3px">{h["food"]}</div>'
-            f'<div style="font-size:13px;color:#7A7065">{h["route"]}</div>'
-            f'<div style="font-size:12.5px;color:#8A8072;margin-top:5px">{h["summary"]}</div></div>'
-            f'<div style="text-align:right;flex:none">'
-            f'<div style="font-family:\'Bricolage Grotesque\',sans-serif;font-size:22px;'
-            f'font-weight:600">{h["meals"]}</div><div style="font-size:10.5px;color:#9A9082">meals</div>'
-            f'<div style="font-family:\'Bricolage Grotesque\',sans-serif;font-size:15px;font-weight:600;'
-            f'color:{GREEN};margin-top:6px">{h["co2"]}</div>'
-            f'<div style="font-size:10.5px;color:#9A9082">CO₂ saved</div></div></div>',
-            unsafe_allow_html=True)
+        st.info("No rescues logged yet this session.")
+        return
+
+    st.dataframe(
+        [{"Time": h["time"], "ID": h["id"], "Food": h["food"], "Route": h["route"],
+          "Meals": h["meals"], "CO₂ avoided": h["co2"]} for h in st.session_state.history],
+        hide_index=True, width="stretch",
+    )
 
 
-elif page == "Alerts":
+def render_alerts():
     a1, a2 = st.columns([4, 1])
     with a1:
-        st.markdown("# Alerts")
+        st.header("Alerts")
         st.caption("Every status change the network broadcast, newest first")
     with a2:
-        if st.button("Clear", use_container_width=True):
+        if st.button("Clear", width="stretch"):
             st.session_state.notifs = []
             st.session_state.toast_cursor = 0
             st.rerun()
 
     if not st.session_state.notifs:
-        st.markdown('<div class="ra-card" style="border-style:dashed;color:#9A9082;padding:44px 24px">'
-                    'Nothing yet. Alerts appear the moment a driver is offered a job.</div>',
-                    unsafe_allow_html=True)
-    for n in st.session_state.notifs:
-        st.markdown(
-            f'<div class="ra-card" style="border-left:3px solid {n["accent"]};display:flex;'
-            f'gap:16px;align-items:center;padding:14px 18px">'
-            f'<div style="flex:1"><div style="font-size:14.5px;font-weight:600">{n["title"]} '
-            f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;'
-            f'text-transform:uppercase;color:{n["accent"]};border:1px solid {n["accent"]}33;'
-            f'border-radius:4px;padding:2px 6px">{n["role"]}</span></div>'
-            f'<div style="font-size:13px;color:#7A7065;margin-top:3px">{n["body"]}</div></div>'
-            f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:#A79C8C">'
-            f'{n["time"]}</div></div>', unsafe_allow_html=True)
+        st.info("Nothing yet. Alerts appear the moment a driver is offered a job.")
+        return
 
-if page != "Live Tracking":
+    for n in st.session_state.notifs:
+        alert_fn = ACCENTS.get(n["accent"], ACCENTS["brand"])["alert"]
+        alert_fn(f'**{n["title"]}** · {n["role"]}  \n{n["body"]}  \n:gray[{n["time"]}]')
+
+
+# ---------------------------------------------------------------- header + navigation
+SHELTERS = load("shelters.json")
+RESTAURANTS = load("restaurants.json")
+DRV = drivers_live()
+AVAIL = [d for d in DRV if d.get("status") == "available"]
+
+st.title("🍽 RescueAgent")
+st.caption("Edinburgh Food Rescue Network")
+with st.container(horizontal=True):
+    st.badge(f"qwen3-235b · {BEDROCK_REGION}", color="gray")
+    st.badge(f"routing: {st.session_state.route_source}", color="gray")
+    st.badge(f"alerts: {len(st.session_state.notifs)}", color="gray")
+
+with st.sidebar:
+    st.subheader("Demo controls")
+    st.session_state.use_bedrock = st.toggle(
+        "Call Bedrock agent", value=st.session_state.use_bedrock,
+        help="Off = deterministic tool pipeline only, no network call. Useful if the venue wifi is bad.")
+    st.caption(f"Leg 1 {LEG1_SECONDS:.0f}s · Leg 2 {LEG2_SECONDS:.0f}s · "
+               f"auto-accept {OFFER_SECONDS:.0f}s")
+
+page_dashboard = st.Page(render_dashboard, title="Dashboard", icon=":material/home:", default=True)
+page_new_rescue = st.Page(render_new_rescue, title="New Rescue", icon=":material/add_circle:")
+page_live_tracking = st.Page(render_live_tracking, title="Live Tracking", icon=":material/near_me:")
+page_active_deliveries = st.Page(render_active_deliveries, title="Active Deliveries",
+                                 icon=":material/local_shipping:")
+page_shelters = st.Page(render_shelters, title="Shelters", icon=":material/storefront:")
+page_drivers = st.Page(render_drivers, title="Drivers", icon=":material/pedal_bike:")
+page_history = st.Page(render_history, title="History", icon=":material/history:")
+page_alerts = st.Page(render_alerts, title="Alerts", icon=":material/notifications:")
+
+pg = st.navigation([
+    page_dashboard, page_new_rescue, page_live_tracking, page_active_deliveries,
+    page_shelters, page_drivers, page_history, page_alerts,
+], position="top")
+pg.run()
+
+if pg.title != "Live Tracking":
     flush_toasts()

@@ -6,3 +6,4 @@ __pycache__/
 .env
 vercel-deploy/.vercel/
 scratch/
+data/routes_cache.json
