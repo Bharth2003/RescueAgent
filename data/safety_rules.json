@@ -1,0 +1,33 @@
+{
+  "source": "UK Food Standards Agency (FSA) guidance -- simplified for RescueAgent demo.",
+  "thermal_windows_minutes": {
+    "hot_cooked": 90,
+    "cold_chilled": 240,
+    "ambient_dry": 480,
+    "frozen": 60
+  },
+  "danger_zone_celsius": {
+    "low": 8,
+    "high": 63,
+    "note": "Ready-to-eat food kept in the 8-63C range for over 2 hours must be discarded."
+  },
+  "uk_14_allergens": [
+    "celery", "cereals containing gluten", "crustaceans", "eggs", "fish",
+    "lupin", "milk", "molluscs", "mustard", "nuts", "peanuts", "sesame",
+    "soybeans", "sulphites"
+  ],
+  "meat_products": [
+    "chicken", "beef", "pork", "lamb", "mutton", "turkey", "duck",
+    "bacon", "ham", "sausage", "mince", "steak", "meat"
+  ],
+  "fish_seafood": [
+    "fish", "salmon", "tuna", "cod", "haddock", "prawn", "prawns",
+    "shrimp", "seafood", "mussel", "mussels"
+  ],
+  "haram_ingredients": [
+    "pork", "bacon", "ham", "gelatin", "lard", "alcohol", "wine",
+    "beer", "rum", "vodka"
+  ],
+  "meal_weight_kg": 0.4,
+  "co2_kg_per_kg_food_waste_avoided": 2.5
+}

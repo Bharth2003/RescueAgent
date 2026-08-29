@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" width="1080" height="700" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1080" height="700" fill="#0E1013"></rect>
+
+  <text x="40" y="46" fill="#E9EBEE" font-size="22" font-weight="bold">RescueAgent — architecture</text>
+  <text x="40" y="68" fill="#6B737E" font-size="13">Strands Agents SDK · Qwen 3 235B on Amazon Bedrock (eu-west-2) · Streamlit front end</text>
+
+  
+  <rect x="40" y="100" width="1000" height="94" rx="8" fill="#12151A" stroke="#23272F"></rect>
+  <text x="56" y="122" fill="#6B737E" font-size="11" letter-spacing="1.5">PEOPLE</text>
+  <rect x="60" y="132" width="290" height="46" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="76" y="153" fill="#E9EBEE" font-size="14" font-weight="bold">Restaurant manager</text>
+  <text x="76" y="169" fill="#9BA3AE" font-size="11.5">describes surplus food, confirms handover</text>
+  <rect x="370" y="132" width="290" height="46" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="386" y="153" fill="#E9EBEE" font-size="14" font-weight="bold">Volunteer driver</text>
+  <text x="386" y="169" fill="#9BA3AE" font-size="11.5">receives offer, accepts, collects, delivers</text>
+  <rect x="680" y="132" width="290" height="46" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="696" y="153" fill="#E9EBEE" font-size="14" font-weight="bold">Shelter / community larder</text>
+  <text x="696" y="169" fill="#9BA3AE" font-size="11.5">signs for the load, capacity updated</text>
+
+  <path d="M545 194 L545 226" stroke="#FF7A2F" stroke-width="2"></path>
+  <path d="M539 220 L545 230 L551 220 Z" fill="#FF7A2F"></path>
+
+  
+  <rect x="40" y="230" width="1000" height="126" rx="8" fill="#12151A" stroke="#23272F"></rect>
+  <text x="56" y="252" fill="#6B737E" font-size="11" letter-spacing="1.5">PRESENTATION — app.py (Streamlit)</text>
+  <rect x="60" y="264" width="176" height="76" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="72" y="285" fill="#E9EBEE" font-size="13" font-weight="bold">New Rescue</text>
+  <text x="72" y="302" fill="#9BA3AE" font-size="11">1,612-restaurant</text>
+  <text x="72" y="317" fill="#9BA3AE" font-size="11">prefix-ranked search</text>
+  <text x="72" y="332" fill="#9BA3AE" font-size="11">+ free-text food entry</text>
+
+  <rect x="248" y="264" width="196" height="76" rx="6" fill="#171A20" stroke="#FF7A2F"></rect>
+  <text x="260" y="285" fill="#E9EBEE" font-size="13" font-weight="bold">Live Tracking</text>
+  <text x="260" y="302" fill="#9BA3AE" font-size="11">st.fragment(run_every=1s)</text>
+  <text x="260" y="317" fill="#9BA3AE" font-size="11">folium + Leaflet map,</text>
+  <text x="260" y="332" fill="#9BA3AE" font-size="11">ETA / distance HUD</text>
+
+  <rect x="456" y="264" width="176" height="76" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="468" y="285" fill="#E9EBEE" font-size="13" font-weight="bold">Role strips</text>
+  <text x="468" y="302" fill="#9BA3AE" font-size="11">manager + driver</text>
+  <text x="468" y="317" fill="#9BA3AE" font-size="11">panels, 5-stage</text>
+  <text x="468" y="332" fill="#9BA3AE" font-size="11">status timeline</text>
+
+  <rect x="644" y="264" width="150" height="76" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="656" y="285" fill="#E9EBEE" font-size="13" font-weight="bold">Alerts</text>
+  <text x="656" y="302" fill="#9BA3AE" font-size="11">st.toast on every</text>
+  <text x="656" y="317" fill="#9BA3AE" font-size="11">status change +</text>
+  <text x="656" y="332" fill="#9BA3AE" font-size="11">persistent feed</text>
+
+  <rect x="806" y="264" width="164" height="76" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="818" y="285" fill="#E9EBEE" font-size="13" font-weight="bold">Directory</text>
+  <text x="818" y="302" fill="#9BA3AE" font-size="11">shelters, drivers,</text>
+  <text x="818" y="317" fill="#9BA3AE" font-size="11">history, session</text>
+  <text x="818" y="332" fill="#9BA3AE" font-size="11">impact stats</text>
+
+  <path d="M545 356 L545 392" stroke="#FF7A2F" stroke-width="2"></path>
+  <path d="M539 386 L545 396 L551 386 Z" fill="#FF7A2F"></path>
+  <text x="556" y="380" fill="#6B737E" font-size="11">prompt + coordinates</text>
+
+  
+  <rect x="40" y="396" width="1000" height="150" rx="8" fill="#12151A" stroke="#FF7A2F"></rect>
+  <text x="56" y="418" fill="#FF7A2F" font-size="11" letter-spacing="1.5">AGENT — Strands Agents SDK</text>
+
+  <rect x="60" y="430" width="236" height="100" rx="6" fill="#1E1811" stroke="#3D3020"></rect>
+  <text x="74" y="452" fill="#E9EBEE" font-size="14" font-weight="bold">Agent(...)</text>
+  <text x="74" y="472" fill="#9BA3AE" font-size="11.5">system_prompt: ordered</text>
+  <text x="74" y="488" fill="#9BA3AE" font-size="11.5">coordination policy</text>
+  <text x="74" y="508" fill="#FBBF24" font-size="11.5">BedrockModel</text>
+  <text x="74" y="523" fill="#9BA3AE" font-size="11">qwen.qwen3-235b-a22b-2507-v1:0</text>
+
+  <rect x="312" y="430" width="658" height="100" rx="6" fill="#171A20" stroke="#2A303A"></rect>
+  <text x="326" y="450" fill="#6B737E" font-size="11" letter-spacing="1.2">@tool FUNCTIONS — tools.py</text>
+
+  <rect x="326" y="460" width="150" height="26" rx="4" fill="#12151A" stroke="#3F3520"></rect>
+  <text x="336" y="477" fill="#FBBF24" font-size="11">analyze_food_safety</text>
+  <rect x="486" y="460" width="150" height="26" rx="4" fill="#12151A" stroke="#3A3050"></rect>
+  <text x="496" y="477" fill="#A78BFA" font-size="11">find_eligible_shelter</text>
+  <rect x="646" y="460" width="150" height="26" rx="4" fill="#12151A" stroke="#1F4A3A"></rect>
+  <text x="656" y="477" fill="#34D399" font-size="11">broadcast_rescue</text>
+  <rect x="806" y="460" width="150" height="26" rx="4" fill="#12151A" stroke="#1F4A3A"></rect>
+  <text x="816" y="477" fill="#34D399" font-size="11">accept_rescue</text>
+
+  <rect x="326" y="494" width="150" height="26" rx="4" fill="#12151A" stroke="#3D3020"></rect>
+  <text x="336" y="511" fill="#FF9457" font-size="11">route_lookup</text>
+  <rect x="486" y="494" width="150" height="26" rx="4" fill="#12151A" stroke="#2A303A"></rect>
+  <text x="496" y="511" fill="#9BA3AE" font-size="11">release_driver</text>
+  <rect x="646" y="494" width="310" height="26" rx="4" fill="#12151A" stroke="#2A303A"></rect>
+  <text x="656" y="511" fill="#6B737E" font-size="11">dispatch_driver (legacy, kept for compatibility)</text>
+
+  <path d="M300 480 L312 480" stroke="#6B737E" stroke-width="1.5"></path>
+
+  <path d="M300 546 L300 582" stroke="#6B737E" stroke-width="2"></path>
+  <path d="M294 576 L300 586 L306 576 Z" fill="#6B737E"></path>
+  <path d="M790 546 L790 582" stroke="#6B737E" stroke-width="2"></path>
+  <path d="M784 576 L790 586 L796 576 Z" fill="#6B737E"></path>
+
+  
+  <rect x="40" y="586" width="500" height="86" rx="8" fill="#12151A" stroke="#23272F"></rect>
+  <text x="56" y="608" fill="#6B737E" font-size="11" letter-spacing="1.5">LOCAL STATE — data/*.json</text>
+  <text x="60" y="630" fill="#E9EBEE" font-size="12">restaurants.json 1,612 · shelters.json 20 · drivers.json 40</text>
+  <text x="60" y="650" fill="#9BA3AE" font-size="11.5">safety_rules.json — UK FSA thermal windows, 14 named allergens</text>
+  <text x="60" y="666" fill="#9BA3AE" font-size="11.5">routes_cache.json — pre-computed road geometry (offline fallback)</text>
+
+  <rect x="560" y="586" width="480" height="86" rx="8" fill="#12151A" stroke="#23272F"></rect>
+  <text x="576" y="608" fill="#6B737E" font-size="11" letter-spacing="1.5">EXTERNAL SERVICES</text>
+  <text x="580" y="630" fill="#E9EBEE" font-size="12">OSRM — road route geometry, distance, duration</text>
+  <text x="580" y="650" fill="#E9EBEE" font-size="12">OpenStreetMap tiles — basemap</text>
+  <text x="580" y="666" fill="#9BA3AE" font-size="11.5">Overpass API — one-off restaurant import (scripts/)</text>
+</svg>

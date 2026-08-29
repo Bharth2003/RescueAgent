@@ -1,0 +1,6 @@
+streamlit>=1.37
+strands-agents
+boto3
+folium>=0.16
+streamlit-folium>=0.21
+requests
