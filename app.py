@@ -34,11 +34,19 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 BEDROCK_MODEL_ID = "qwen.qwen3-235b-a22b-2507-v1:0"
 BEDROCK_REGION = "eu-west-2"
 
-# demo clock — the whole journey plays in about 90 s, slow enough to narrate
-LEG1_SECONDS = 30.0     # driver -> restaurant
-LEG2_SECONDS = 40.0     # restaurant -> shelter
-OFFER_SECONDS = 8.0     # auto-accept if nobody taps Accept
-PICKUP_SECONDS = 9.0    # auto-handover if nobody taps the button
+# Journey clock. A leg plays at roughly the real driving time OSRM gives for it,
+# so a 0.4 km hop is quick and a 4 km run across town genuinely takes longer —
+# a fixed duration for every leg is what made the old demo feel artificial.
+# Clamped at both ends so a trip stays watchable without being a fast-forward.
+LEG_MIN_SECONDS = 80.0
+LEG_MAX_SECONDS = 300.0
+OFFER_SECONDS = 20.0    # auto-accept if nobody taps Accept
+PICKUP_SECONDS = 35.0   # auto-handover if nobody taps the button
+
+
+def leg_seconds(leg):
+    """How long to play one leg for, in wall-clock seconds."""
+    return max(LEG_MIN_SECONDS, min(LEG_MAX_SECONDS, leg["minutes"] * 60.0))
 
 BRAND = "#FF7A2F"
 VEH = {"van": "Van", "car": "Car", "motorbike": "Motorbike", "e-bike": "E-bike",
@@ -180,7 +188,6 @@ def init_state():
         "stats": {"rescues": 0, "meals": 0, "kg": 0.0, "co2": 0.0},
         "restaurant": None,
         "food_text": "",
-        "route_source": "standby",
         "use_bedrock": True,
         "agent_reply": "",
     }
@@ -300,7 +307,7 @@ def launch_rescue():
                     f'Surplus food at {r["name"]} ({r["address"]}), '
                     f'coordinates {r["lat"]}, {r["lng"]}. The manager says: "{text}"'))
             st.session_state.agent_reply = reply
-            say("agent", reply.strip()[:900], f"{BEDROCK_MODEL_ID} · {BEDROCK_REGION}", "brand")
+            say("agent", reply.strip()[:900], "", "brand")
         except Exception as e:
             say("system",
                 "Bedrock is unreachable, so I am running the deterministic tool "
@@ -328,7 +335,6 @@ def do_accept(driver_id):
     leg1 = get_route((won["current_lat"], won["current_lng"]), (r["lat"], r["lng"]), won["vehicle_type"])
     leg2 = get_route((r["lat"], r["lng"]), (s["lat"], s["lng"]), won["vehicle_type"])
     d["legs"] = [leg1, leg2]
-    st.session_state.route_source = leg1["source"]
 
     bag = " and is carrying a thermal bag" if won.get("has_thermal_bag") else ""
     ride = (VEH.get(won["vehicle_type"]) or "vehicle").lower()
@@ -427,7 +433,7 @@ def advance():
             do_accept(d["offers"][0]["driver_id"])
         return 0.0
     if ph == "to_pickup":
-        p = min(1.0, el / LEG1_SECONDS)
+        p = min(1.0, el / leg_seconds(d["legs"][0]))
         if p >= 1.0:
             do_arrive()
             return 1.0
@@ -437,7 +443,7 @@ def advance():
             do_handover()
         return 0.0
     if ph == "to_shelter":
-        p = min(1.0, el / LEG2_SECONDS)
+        p = min(1.0, el / leg_seconds(d["legs"][1]))
         if p >= 1.0:
             do_deliver()
             return 1.0
@@ -451,7 +457,6 @@ def reset_demo():
         release_driver(d["winner"]["driver_id"])
     st.session_state.delivery = None
     st.session_state.steps = []
-    st.session_state.route_source = "standby"
     load.clear()
 
 
@@ -488,7 +493,7 @@ def map_plan():
 
     if ph == "to_pickup":
         return {**base, **pins, "phase": ph, "legend": legend, "route": l1,
-                "t0": d["t0"], "dur": LEG1_SECONDS, "eta_min": leg1["minutes"],
+                "t0": d["t0"], "dur": leg_seconds(leg1), "eta_min": leg1["minutes"],
                 "label": "ETA to pickup"}
     if ph == "at_pickup":
         return {**base, **pins, "phase": ph, "legend": legend, "route": l1, "hold": 1.0,
@@ -496,7 +501,7 @@ def map_plan():
                 "sub": f'{d["winner"]["name"]} is waiting for the handover'}
     if ph == "to_shelter":
         return {**base, **pins, "phase": ph, "legend": legend, "route": l2,
-                "done_route": l1, "t0": d["t0"], "dur": LEG2_SECONDS,
+                "done_route": l1, "t0": d["t0"], "dur": leg_seconds(leg2),
                 "eta_min": leg2["minutes"], "label": "ETA to shelter"}
     return {**base, **pins, "phase": ph, "legend": legend, "route": l2,
             "done_route": l1, "hold": 1.0, "label": "Delivered", "value": "✓",
@@ -929,21 +934,17 @@ DRV = drivers_live()
 AVAIL = [d for d in DRV if d.get("status") == "available"]
 
 st.title("🍽 RescueAgent")
-with st.container(horizontal=True):
-    st.badge("Edinburgh food rescue network", icon=":material/hub:", color="gray")
-    st.badge(f"qwen3-235b · {BEDROCK_REGION}", icon=":material/smart_toy:", color="gray")
-    st.badge(f"routing: {st.session_state.route_source}", icon=":material/route:", color="gray")
-    st.badge(f"{len(st.session_state.notifs)} alerts",
-             icon=":material/notifications:", color="gray")
+st.caption("Edinburgh food rescue network")
 
 with st.sidebar:
-    st.subheader("Demo controls")
+    st.subheader("Settings")
     st.session_state.use_bedrock = st.toggle(
-        "Call Bedrock agent", value=st.session_state.use_bedrock,
+        "AI reasoning", value=st.session_state.use_bedrock,
         help="Off = deterministic tool pipeline only, no network call. "
              "Useful if the venue wifi is bad.")
-    st.caption(f"Leg 1 {LEG1_SECONDS:.0f}s · Leg 2 {LEG2_SECONDS:.0f}s · "
-               f"auto-accept {OFFER_SECONDS:.0f}s")
+    st.caption("Each leg plays at about its real driving time, so a run lasts "
+               "roughly 3–8 minutes depending on the distance. Use the buttons "
+               "on Live tracking to move a stage on early.")
 
 page_dashboard = st.Page(render_dashboard, title="Dashboard",
                          icon=":material/dashboard:", default=True)
