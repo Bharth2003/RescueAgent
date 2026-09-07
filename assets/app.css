@@ -225,8 +225,10 @@ button[data-testid="stBaseButton-secondary"]:hover {
 }
 
 /* ---- top navigation ----------------------------------------------------- */
-[data-testid="stNavLink"] { border-radius: 10px; }
-[data-testid="stNavLink"][aria-current="page"] {
+[data-testid="stNavLink"],
+[data-testid="stTopNavLink"] { border-radius: 10px; }
+[data-testid="stNavLink"][aria-current="page"],
+[data-testid="stTopNavLink"][aria-current="page"] {
   background: rgba(255, 122, 47, .14);
 }
 
