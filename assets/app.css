@@ -230,7 +230,7 @@ button[data-testid="stBaseButton-secondary"]:hover {
   background: rgba(255, 122, 47, .14);
 }
 
-/* Streamlit's "Deploy" / status noise in the corner: hide for a clean stage */
-[data-testid="stToolbar"] { display: none; }
-#MainMenu { visibility: hidden; }
+/* Hide Deploy + hamburger; keep the top page nav (it lives in the same toolbar). */
+[data-testid="stAppDeployButton"],
+[data-testid="stMainMenu"] { display: none; }
 footer { visibility: hidden; }
