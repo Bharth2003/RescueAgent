@@ -132,6 +132,16 @@
 [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricValue"] {
   font-size: 27px !important;
 }
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] {
+  letter-spacing: .03em;
+  font-size: 10.5px !important;
+  white-space: normal !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] p {
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: clip !important;
+}
 [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetric"]::before {
   height: 2px;
   opacity: .65;
