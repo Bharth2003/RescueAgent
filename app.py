@@ -87,6 +87,48 @@ st.set_page_config(page_title="RescueAgent — Edinburgh", page_icon="🍽",
                    layout="wide", initial_sidebar_state="collapsed")
 
 
+# ---------------------------------------------------------------- styling
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+def _load_css():
+    path = os.path.join(_ASSETS_DIR, "app.css")
+    if not os.path.exists(path):
+        return ""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def inject_css():
+    css = _load_css()
+    if css:
+        st.html(f"<style>{css}</style>")
+
+
+def render_hero(avail, total, active, ai_on):
+    """Branded header shown on every page — logo, title and live status chips."""
+    ai_chip = ('<span class="ra-chip is-brand"><b>AI</b> reasoning on</span>' if ai_on
+               else '<span class="ra-chip is-off"><b>AI</b> off · tools only</span>')
+    st.html(
+        f"""
+        <div class="ra-hero">
+          <div class="ra-hero-brand">
+            <div class="ra-logo">🍽</div>
+            <div>
+              <div class="ra-title">Rescue<span>Agent</span></div>
+              <div class="ra-sub">Edinburgh food rescue network · agentic dispatch</div>
+            </div>
+          </div>
+          <div class="ra-hero-chips">
+            <span class="ra-chip is-green"><b>{avail}</b>/{total} drivers on shift</span>
+            <span class="ra-chip is-brand"><b>{active}</b> in flight</span>
+            {ai_chip}
+          </div>
+        </div>
+        """
+    )
+
+
 # ---------------------------------------------------------------- data
 @st.cache_data
 def load(name):
@@ -933,8 +975,11 @@ RESTAURANTS = load("restaurants.json")
 DRV = drivers_live()
 AVAIL = [d for d in DRV if d.get("status") == "available"]
 
-st.title("🍽 RescueAgent")
-st.caption("Edinburgh food rescue network")
+inject_css()
+
+_active = 1 if st.session_state.delivery and \
+    st.session_state.delivery["phase"] != "delivered" else 0
+render_hero(len(AVAIL), len(DRV), _active, st.session_state.use_bedrock)
 
 with st.sidebar:
     st.subheader("Settings")

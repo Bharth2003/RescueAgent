@@ -1,0 +1,226 @@
+/*
+ * RescueAgent — presentation layer
+ * --------------------------------
+ * Base colours, fonts and radii live in .streamlit/config.toml (Streamlit's
+ * native theme, the most stable styling layer). This file is the thin polish
+ * on top: KPI cards, the branded hero, card elevation and button treatment.
+ * Selectors lean on stable Streamlit test ids and our own .ra-* classes.
+ */
+
+:root {
+  --ra-brand: #FF7A2F;
+  --ra-brand-2: #FF9457;
+  --ra-bg: #0E1013;
+  --ra-panel: #171A20;
+  --ra-panel-2: #1B1F26;
+  --ra-border: #2A303A;
+  --ra-border-soft: #232830;
+  --ra-text: #E9EBEE;
+  --ra-muted: #9BA3AE;
+  --ra-green: #34D399;
+  --ra-violet: #A78BFA;
+  --ra-shadow: 0 10px 30px rgba(0, 0, 0, .38);
+}
+
+/* ---- page rhythm -------------------------------------------------------- */
+[data-testid="stMainBlockContainer"],
+.block-container {
+  max-width: 1420px;
+  padding-top: 1.1rem;
+  padding-bottom: 3rem;
+}
+
+/* Streamlit's default top toolbar/header: make it blend into the dark canvas */
+[data-testid="stHeader"] {
+  background: transparent;
+}
+
+/* ---- branded hero ------------------------------------------------------- */
+.ra-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 20px 26px;
+  margin: 2px 0 18px;
+  border-radius: 20px;
+  border: 1px solid var(--ra-border);
+  background:
+    radial-gradient(1200px 240px at 0% -40%, rgba(255, 122, 47, .16), transparent 60%),
+    linear-gradient(180deg, #14171D 0%, #101317 100%);
+  box-shadow: var(--ra-shadow);
+}
+.ra-hero-brand { display: flex; align-items: center; gap: 16px; }
+.ra-logo {
+  width: 52px; height: 52px; flex: 0 0 52px;
+  border-radius: 15px;
+  display: grid; place-items: center;
+  font-size: 27px;
+  background: linear-gradient(135deg, var(--ra-brand), var(--ra-brand-2));
+  box-shadow: 0 8px 20px rgba(255, 122, 47, .4);
+}
+.ra-title {
+  font-size: 30px; font-weight: 800; line-height: 1.05;
+  letter-spacing: -.01em; color: var(--ra-text);
+}
+.ra-title span { color: var(--ra-brand); }
+.ra-sub { font-size: 14px; color: var(--ra-muted); margin-top: 3px; }
+
+.ra-hero-chips { display: flex; gap: 10px; flex-wrap: wrap; }
+.ra-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 9px 15px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; color: var(--ra-text);
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid var(--ra-border);
+  white-space: nowrap;
+}
+.ra-chip b { font-size: 15px; }
+.ra-chip::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ra-muted);
+}
+.ra-chip.is-green::before { background: var(--ra-green); box-shadow: 0 0 0 4px rgba(52, 211, 153, .16); }
+.ra-chip.is-brand::before { background: var(--ra-brand); box-shadow: 0 0 0 4px rgba(255, 122, 47, .16); }
+.ra-chip.is-off::before { background: #5C6675; }
+
+/* ---- KPI metric cards --------------------------------------------------- */
+[data-testid="stMetric"] {
+  position: relative;
+  overflow: hidden;
+  padding: 20px 22px 18px;
+  border-radius: 18px !important;
+  border: 1px solid var(--ra-border) !important;
+  background: linear-gradient(180deg, var(--ra-panel) 0%, #14171C 100%) !important;
+  box-shadow: var(--ra-shadow);
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+[data-testid="stMetric"]::before {
+  content: "";
+  position: absolute; left: 0; top: 0;
+  width: 100%; height: 3px;
+  background: linear-gradient(90deg, var(--ra-brand), var(--ra-brand-2));
+  opacity: .9;
+}
+[data-testid="stMetric"]:hover {
+  transform: translateY(-3px);
+  border-color: rgba(255, 122, 47, .55) !important;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, .5);
+}
+[data-testid="stMetricLabel"] {
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--ra-muted) !important;
+}
+[data-testid="stMetricValue"] {
+  color: var(--ra-text) !important;
+  font-weight: 800 !important;
+  line-height: 1.1;
+}
+/* never clip a metric value to an ellipsis */
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] > div {
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: clip !important;
+}
+/* secondary metrics nested inside a panel (e.g. the Network strip) are
+   narrower, so scale their value down to fit without truncating */
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricValue"] {
+  font-size: 27px !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetric"]::before {
+  height: 2px;
+  opacity: .65;
+}
+
+/* ---- cards / bordered containers --------------------------------------- */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: 18px !important;
+  border: 1px solid var(--ra-border-soft) !important;
+  background: linear-gradient(180deg, rgba(23, 26, 32, .72), rgba(18, 21, 26, .72)) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {
+  border-color: var(--ra-border) !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .4);
+}
+/* the scrollable narration container should not lift or grow a heavy shadow */
+.ra-flush [data-testid="stVerticalBlockBorderWrapper"]:hover { transform: none; }
+
+/* ---- buttons ------------------------------------------------------------ */
+.stButton > button,
+.stDownloadButton > button {
+  border-radius: 12px !important;
+  font-weight: 600 !important;
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease;
+}
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+  transform: translateY(-1px);
+}
+/* primary call-to-action: brand gradient + glow */
+button[data-testid="stBaseButton-primary"] {
+  background: linear-gradient(135deg, var(--ra-brand) 0%, var(--ra-brand-2) 100%) !important;
+  border: none !important;
+  color: #1a0f06 !important;
+  box-shadow: 0 8px 20px rgba(255, 122, 47, .34) !important;
+}
+button[data-testid="stBaseButton-primary"]:hover {
+  box-shadow: 0 12px 26px rgba(255, 122, 47, .5) !important;
+}
+/* secondary buttons: quiet outline that warms on hover */
+button[data-testid="stBaseButton-secondary"]:hover {
+  border-color: var(--ra-brand) !important;
+  color: var(--ra-brand-2) !important;
+}
+
+/* ---- inputs ------------------------------------------------------------- */
+.stTextArea textarea,
+.stTextInput input,
+[data-baseweb="select"] > div {
+  border-radius: 12px !important;
+}
+.stTextArea textarea:focus,
+.stTextInput input:focus {
+  border-color: var(--ra-brand) !important;
+  box-shadow: 0 0 0 3px rgba(255, 122, 47, .18) !important;
+}
+
+/* ---- progress bars ------------------------------------------------------ */
+[data-testid="stProgress"] div[role="progressbar"] > div {
+  background: linear-gradient(90deg, var(--ra-brand), #FBBF24) !important;
+}
+
+/* ---- chat / agent trace ------------------------------------------------- */
+[data-testid="stChatMessage"] {
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid var(--ra-border-soft);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+/* ---- section headings inside cards ------------------------------------- */
+[data-testid="stVerticalBlockBorderWrapper"] h3 {
+  font-size: 15px !important;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ra-muted) !important;
+  margin-bottom: 4px;
+}
+
+/* ---- top navigation ----------------------------------------------------- */
+[data-testid="stNavLink"] { border-radius: 10px; }
+[data-testid="stNavLink"][aria-current="page"] {
+  background: rgba(255, 122, 47, .14);
+}
+
+/* Streamlit's "Deploy" / status noise in the corner: hide for a clean stage */
+[data-testid="stToolbar"] { display: none; }
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
