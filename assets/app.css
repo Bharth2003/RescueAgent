@@ -232,6 +232,11 @@ button[data-testid="stBaseButton-secondary"]:hover {
   background: rgba(255, 122, 47, .14);
 }
 
+/* ---- login / role landing ---------------------------------------------- */
+.ra-login { margin: 6px 0 18px; }
+.ra-login-title { font-size: 24px; font-weight: 800; color: var(--ra-text); }
+.ra-login-sub { font-size: 14px; color: var(--ra-muted); margin-top: 6px; max-width: 720px; }
+
 /* Hide Deploy + hamburger; keep the top page nav (it lives in the same toolbar). */
 [data-testid="stAppDeployButton"],
 [data-testid="stMainMenu"] { display: none; }
