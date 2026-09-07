@@ -1236,6 +1236,9 @@ def render_manager_console():
             b.reset()
             st.session_state.mgr_restaurant = None
             st.session_state.mgr_food_text = ""
+            st.session_state.spoken_cursor = 0
+            st.session_state.voice_primed = False
+            st.session_state.voice_html = ""
             st.rerun()
 
     @st.fragment(run_every=1.0 if running else None)
@@ -1243,6 +1246,7 @@ def render_manager_console():
         b.tick()
         snap = b.snapshot()
         flush_events("manager", snap["events"])
+        speak_narration(snap)
         d = snap.get("delivery")
         left, right = st.columns([1, 1.15], gap="medium")
         with left:
@@ -1256,6 +1260,9 @@ def render_manager_console():
                         b.reset()
                         st.session_state.mgr_restaurant = None
                         st.session_state.mgr_food_text = ""
+                        st.session_state.spoken_cursor = 0
+                        st.session_state.voice_primed = False
+                        st.session_state.voice_html = ""
                         st.rerun()
         with right:
             live_map(brk_map_plan(snap), height=460, key="mgr_map")
@@ -1360,9 +1367,9 @@ def render_driver_panel(b, d, key_prefix="drv"):
 
 def render_driver_console():
     b = get_broker()
-    snap0 = b.snapshot()
-    d0 = snap0.get("delivery")
-    running = (d0 is None) or (d0["phase"] != "delivered")
+    # A driver on shift always listens, so the window keeps polling — it catches
+    # the next offer even after a previous rescue was delivered in this session.
+    running = True
 
     top1, top2 = st.columns([4, 1.1])
     with top1:
@@ -1376,6 +1383,7 @@ def render_driver_console():
         b.tick()
         snap = b.snapshot()
         flush_events("driver", snap["events"])
+        speak_narration(snap)
         d = snap.get("delivery")
         # Map is always on top so the driver can watch the whole journey.
         live_map(brk_map_plan(snap), height=380, key="drv_map")
@@ -1468,42 +1476,36 @@ def render_live_console():
 
 # ---------------------------------------------------------------- login
 def render_login():
+    # Featured path: the two-window demo — one window per user, side by side.
     with st.container(border=True):
-        h1, h2 = st.columns([3, 1.2])
-        with h1:
-            st.markdown('<div class="ra-login-title">🧑‍🍳🛵 Live demo — Manager & Driver, '
-                        'side by side</div>', unsafe_allow_html=True)
-            st.markdown('<div class="ra-login-sub">Both roles on one screen watching the '
-                        'same live map. The agent narrates each step aloud (am_michael) and '
-                        'pops a notification the moment the work is done.</div>',
-                        unsafe_allow_html=True)
-        with h2:
-            if st.button("Open live demo", type="primary", width="stretch", key="login_live"):
-                st.query_params["role"] = "live"
-                st.rerun()
-    st.caption("Or open a single role in its own window:")
-    c1, c2, c3 = st.columns(3)
+        st.markdown('<div class="ra-login-title">🧑‍🍳🛵 Two-window demo — one window '
+                    'per user</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ra-login-sub">Open each user in its own browser window '
+                    'and place them side by side. The <b>Manager</b> dispatches; the '
+                    '<b>Driver</b> receives the offer, accepts and delivers — both watching '
+                    'the same live map. Each window narrates the agent aloud with '
+                    '<b>am_michael</b> (warm US) and pops a notification as every step '
+                    'completes. On a single screen, mute one window\'s voice to avoid an '
+                    'echo.</div>', unsafe_allow_html=True)
+        st.html(
+            '<div class="ra-open-row">'
+            '  <a class="ra-open-btn is-mgr" href="?role=manager" target="_blank" '
+            'rel="noopener">🧑‍🍳 Open Manager window ↗</a>'
+            '  <a class="ra-open-btn is-drv" href="?role=driver" target="_blank" '
+            'rel="noopener">🛵 Open Driver window ↗</a>'
+            '</div>'
+        )
+    st.caption("Prefer one screen? Open the combined side-by-side view, or the full "
+               "operations dashboard:")
+    c1, c2 = st.columns(2)
     with c1:
-        with st.container(border=True):
-            st.subheader("🧑‍🍳 Manager")
-            st.caption("A kitchen manager reporting surplus food and dispatching a rescue.")
-            if st.button("Log in as Manager", type="primary", width="stretch", key="login_mgr"):
-                st.query_params["role"] = "manager"
-                st.rerun()
+        if st.button("🖥 Same-screen side-by-side", width="stretch", key="login_live"):
+            st.query_params["role"] = "live"
+            st.rerun()
     with c2:
-        with st.container(border=True):
-            st.subheader("🛵 Driver")
-            st.caption("A volunteer driver on shift, receiving and accepting pickup offers.")
-            if st.button("Log in as Driver", type="primary", width="stretch", key="login_drv"):
-                st.query_params["role"] = "driver"
-                st.rerun()
-    with c3:
-        with st.container(border=True):
-            st.subheader("📊 Operations")
-            st.caption("The full multi-page operations dashboard (shelters, drivers, history).")
-            if st.button("Open operations view", width="stretch", key="login_ops"):
-                st.query_params["role"] = "ops"
-                st.rerun()
+        if st.button("📊 Operations dashboard", width="stretch", key="login_ops"):
+            st.query_params["role"] = "ops"
+            st.rerun()
 
 
 # ---------------------------------------------------------------- header + nav
@@ -1549,6 +1551,12 @@ def role_sidebar(role):
             st.rerun()
         st.divider()
         st.subheader("Settings")
+        if role in ("manager", "driver") and voice.is_available():
+            st.session_state.voice_on = st.toggle(
+                "Voice (am_michael)", value=st.session_state.get("voice_on", True),
+                key="sb_voice",
+                help="Warm US male narration of the agent's steps. If both windows "
+                     "are on one screen, mute one to avoid an echo.")
         st.session_state.use_bedrock = st.toggle(
             "AI reasoning", value=st.session_state.use_bedrock,
             help="Off = deterministic tool pipeline only, no network call.")

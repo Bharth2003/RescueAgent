@@ -278,6 +278,31 @@ button[data-testid="stBaseButton-secondary"]:hover {
   50%      { box-shadow: 0 0 0 8px rgba(255, 122, 47, 0); }
 }
 
+/* ---- two-window demo launch buttons ------------------------------------ */
+.ra-open-row {
+  display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px;
+}
+.ra-open-btn {
+  flex: 1 1 240px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 15px 20px;
+  border-radius: 14px;
+  font-size: 15.5px; font-weight: 700;
+  text-decoration: none !important;
+  color: #1a0f06 !important;
+  transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+}
+.ra-open-btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
+.ra-open-btn.is-mgr {
+  background: linear-gradient(135deg, var(--ra-brand), var(--ra-brand-2));
+  box-shadow: 0 8px 20px rgba(255, 122, 47, .34);
+}
+.ra-open-btn.is-drv {
+  color: #05231a !important;
+  background: linear-gradient(135deg, #34D399, #6EE7B7);
+  box-shadow: 0 8px 20px rgba(52, 211, 153, .3);
+}
+
 /* ---- assistant chat polish (AI-assistant inspired) --------------------- */
 /* Softer, glassier conversation bubbles with an avatar ring */
 [data-testid="stChatMessage"] {
