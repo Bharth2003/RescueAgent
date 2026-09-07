@@ -237,6 +237,65 @@ button[data-testid="stBaseButton-secondary"]:hover {
 .ra-login-title { font-size: 24px; font-weight: 800; color: var(--ra-text); }
 .ra-login-sub { font-size: 14px; color: var(--ra-muted); margin-top: 6px; max-width: 720px; }
 
+/* ---- side-by-side live console ----------------------------------------- */
+/* Labelled header pill that sits above each console panel */
+.ra-console-tag {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 4px 0 -6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--ra-text);
+  border: 1px solid var(--ra-border);
+  background: rgba(255, 255, 255, .03);
+}
+.ra-console-tag.is-mgr {
+  border-color: rgba(255, 122, 47, .5);
+  background: linear-gradient(180deg, rgba(255, 122, 47, .16), rgba(255, 122, 47, .04));
+}
+.ra-console-tag.is-drv {
+  border-color: rgba(52, 211, 153, .5);
+  background: linear-gradient(180deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .04));
+}
+.ra-console-tag.is-agent {
+  border-color: rgba(167, 139, 250, .5);
+  background: linear-gradient(180deg, rgba(167, 139, 250, .16), rgba(167, 139, 250, .04));
+}
+
+/* Incoming pickup offer banner on the driver side — gently pulsing */
+.ra-incoming {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; margin-bottom: 10px;
+  border-radius: 14px;
+  font-weight: 700; color: #E9EBEE;
+  border: 1px solid rgba(255, 122, 47, .55);
+  background: linear-gradient(135deg, rgba(255, 122, 47, .22), rgba(255, 148, 87, .08));
+  animation: ra-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ra-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 122, 47, .34); }
+  50%      { box-shadow: 0 0 0 8px rgba(255, 122, 47, 0); }
+}
+
+/* ---- assistant chat polish (AI-assistant inspired) --------------------- */
+/* Softer, glassier conversation bubbles with an avatar ring */
+[data-testid="stChatMessage"] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .02));
+  backdrop-filter: blur(2px);
+}
+[data-testid="stChatMessageAvatarCustom"],
+[data-testid="stChatMessage"] [data-testid="stChatMessageAvatar"] {
+  box-shadow: 0 0 0 2px rgba(255, 122, 47, .25);
+  border-radius: 50%;
+}
+/* toast notifications: lift them so completion pop-ups read clearly */
+[data-testid="stToast"] {
+  border: 1px solid var(--ra-border) !important;
+  box-shadow: var(--ra-shadow) !important;
+  border-radius: 14px !important;
+}
+
 /* Hide Deploy + hamburger; keep the top page nav (it lives in the same toolbar). */
 [data-testid="stAppDeployButton"],
 [data-testid="stMainMenu"] { display: none; }
