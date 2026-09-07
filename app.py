@@ -1225,7 +1225,31 @@ def render_manager_console():
             with st.container(border=True):
                 st.subheader("What the agent is doing")
                 brk_narration(snap, height=240)
+        render_impact(snap)
     frag()
+
+
+def render_impact(snap):
+    """Session impact roll-up and the log of completed rescues."""
+    stats = snap.get("stats", {})
+    hist = snap.get("history", [])
+    st.divider()
+    st.subheader("Impact this session")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Rescues completed", stats.get("rescues", 0), border=True)
+    m2.metric("Meals delivered", stats.get("meals", 0), border=True)
+    m3.metric("Food rescued", f'{stats.get("kg", 0.0):.1f} kg', border=True)
+    m4.metric("CO₂ avoided", f'{stats.get("co2", 0.0):.1f} kg', border=True)
+    with st.container(border=True):
+        st.subheader("Rescue history")
+        if hist:
+            st.dataframe(
+                [{"Time": h["time"], "ID": h["id"], "Food": h["food"],
+                  "Route": h["route"], "Driver": h["driver"], "Meals": h["meals"],
+                  "CO₂ avoided": f'{h["co2"]} kg'} for h in hist],
+                hide_index=True, width="stretch")
+        else:
+            st.caption("Completed rescues will be logged here with meals and CO₂ saved.")
 
 
 # ---------------------------------------------------------------- driver

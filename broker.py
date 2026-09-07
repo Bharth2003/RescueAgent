@@ -44,15 +44,23 @@ class Broker:
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._reset_state()
+        self._reset_state(full=True)
 
     # ------------------------------------------------------------------ state
-    def _reset_state(self):
+    def _reset_state(self, full=False):
+        """Clear the active rescue. ``history`` and cumulative ``stats`` survive
+        between rescues (they are the session's impact log); ``full`` also wipes
+        those, used on __init__ and an explicit reset()."""
+        prev = getattr(self, "state", None)
         self.state = {
             "delivery": None,   # the one shared delivery dict
             "steps": [],        # plain-English agent narration
             "events": [],       # notification feed, oldest first
-            "seq": 0,           # bumped on every change for cheap change-detection
+            "seq": (prev["seq"] + 1) if prev else 0,
+            "history": [] if (full or not prev) else prev.get("history", []),
+            "stats": {"rescues": 0, "meals": 0, "kg": 0.0, "co2": 0.0}
+                     if (full or not prev) else prev.get("stats",
+                         {"rescues": 0, "meals": 0, "kg": 0.0, "co2": 0.0}),
         }
 
     def snapshot(self):
@@ -231,6 +239,19 @@ class Broker:
         release_driver(w["driver_id"])
         d["phase"] = "delivered"
         d["result"] = {"meals": meals, "co2": co2, "total_km": total_km}
+        # log the completed rescue and roll up the session's cumulative impact
+        st = self.state["stats"]
+        st["rescues"] += 1
+        st["meals"] += meals
+        st["kg"] = round(st["kg"] + sf["weight_kg"], 1)
+        st["co2"] = round(st["co2"] + co2, 1)
+        self.state["history"].insert(0, {
+            "id": d["id"], "time": _now_str(),
+            "food": d["food_text"],
+            "route": f'{d["restaurant"]["name"]} → {s["name"]}',
+            "driver": w["name"], "meals": meals, "kg": sf["weight_kg"],
+            "co2": co2, "km": round(total_km, 1),
+        })
         self._say("shelter",
                   f'**Delivered.** {s["name"]} signed for {sf["weight_kg"]} kg — about '
                   f'**{meals} meals** — and {w["name"]} is back on shift. '

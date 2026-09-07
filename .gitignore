@@ -7,3 +7,4 @@ __pycache__/
 vercel-deploy/.vercel/
 scratch/
 data/routes_cache.json
+.voices/
