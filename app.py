@@ -1272,18 +1272,19 @@ def render_driver_console():
         snap = b.snapshot()
         flush_events("driver", snap["events"])
         d = snap.get("delivery")
-        left, right = st.columns([1.15, 1], gap="medium")
-        with left:
-            live_map(brk_map_plan(snap), height=460, key="drv_map")
-            if d:
-                render_stepper(PHASE_STAGE[d["phase"]])
-        with right:
+        # Map is always on top so the driver can watch the whole journey.
+        live_map(brk_map_plan(snap), height=380, key="drv_map")
+        if d:
+            render_stepper(PHASE_STAGE[d["phase"]])
+        st.divider()
+        if True:
             if not d:
                 st.subheader("No offers yet")
                 st.info("You're on shift and available. When a manager dispatches a "
-                        "rescue, the offer pops up here with a sound-free toast.")
+                        "rescue, the offer pops up here — with a chime.")
             elif d["phase"] == "broadcast":
-                st.subheader("🛵 New pickup offer")
+                st.markdown('<div class="ra-incoming">🔔 New pickup offer</div>',
+                            unsafe_allow_html=True)
                 sf = d["safety"]
                 with st.container(border=True):
                     st.markdown(f'**{sf["weight_kg"]} kg · {d["restaurant"]["name"]}**')
@@ -1343,15 +1344,6 @@ def render_driver_console():
 
 # ---------------------------------------------------------------- login
 def render_login():
-    st.html(
-        """
-        <div class="ra-login">
-          <div class="ra-login-title">Choose how you want to join the demo</div>
-          <div class="ra-login-sub">Open one role in each window to see a dispatch in
-          the Manager view pop up instantly as an offer in the Driver view.</div>
-        </div>
-        """
-    )
     c1, c2, c3 = st.columns(3)
     with c1:
         with st.container(border=True):
