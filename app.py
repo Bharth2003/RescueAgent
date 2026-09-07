@@ -1403,13 +1403,15 @@ def role_sidebar(role):
 
 inject_css()
 role = st.query_params.get("role")
+_show_hero = st.query_params.get("hero") != "off"
 
 if role in ("manager", "driver", "ops"):
     _snap = get_broker().snapshot()
     _active = brk_active(_snap) if role in ("manager", "driver") else (
         1 if st.session_state.delivery and
         st.session_state.delivery["phase"] != "delivered" else 0)
-    render_hero(len(AVAIL), len(DRV), _active, st.session_state.use_bedrock)
+    if _show_hero:
+        render_hero(len(AVAIL), len(DRV), _active, st.session_state.use_bedrock)
     role_sidebar(role)
     if role == "manager":
         render_manager_console()
