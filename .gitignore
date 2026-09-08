@@ -8,3 +8,5 @@ vercel-deploy/.vercel/
 scratch/
 data/routes_cache.json
 .voices/
+.models/
+docs/demo-frames/

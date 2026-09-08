@@ -35,6 +35,14 @@
   background: transparent;
 }
 
+/* Ambient AI-assistant backdrop: soft warm glow top-left, cool depth bottom */
+[data-testid="stAppViewContainer"] {
+  background:
+    radial-gradient(1100px 520px at 12% -8%, rgba(255, 122, 47, .10), transparent 55%),
+    radial-gradient(900px 600px at 98% 108%, rgba(96, 165, 250, .07), transparent 55%),
+    var(--ra-bg);
+}
+
 /* ---- branded hero ------------------------------------------------------- */
 .ra-hero {
   display: flex;
@@ -236,6 +244,96 @@ button[data-testid="stBaseButton-secondary"]:hover {
 .ra-login { margin: 6px 0 18px; }
 .ra-login-title { font-size: 24px; font-weight: 800; color: var(--ra-text); }
 .ra-login-sub { font-size: 14px; color: var(--ra-muted); margin-top: 6px; max-width: 720px; }
+
+/* ---- side-by-side live console ----------------------------------------- */
+/* Labelled header pill that sits above each console panel */
+.ra-console-tag {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 4px 0 -6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--ra-text);
+  border: 1px solid var(--ra-border);
+  background: rgba(255, 255, 255, .03);
+}
+.ra-console-tag.is-mgr {
+  border-color: rgba(255, 122, 47, .5);
+  background: linear-gradient(180deg, rgba(255, 122, 47, .16), rgba(255, 122, 47, .04));
+}
+.ra-console-tag.is-drv {
+  border-color: rgba(52, 211, 153, .5);
+  background: linear-gradient(180deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .04));
+}
+.ra-console-tag.is-agent {
+  border-color: rgba(167, 139, 250, .5);
+  background: linear-gradient(180deg, rgba(167, 139, 250, .16), rgba(167, 139, 250, .04));
+}
+
+/* Incoming pickup offer banner on the driver side — gently pulsing */
+.ra-incoming {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; margin-bottom: 10px;
+  border-radius: 14px;
+  font-weight: 700; color: #E9EBEE;
+  border: 1px solid rgba(255, 122, 47, .55);
+  background: linear-gradient(135deg, rgba(255, 122, 47, .22), rgba(255, 148, 87, .08));
+  animation: ra-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ra-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 122, 47, .34); }
+  50%      { box-shadow: 0 0 0 8px rgba(255, 122, 47, 0); }
+}
+
+/* ---- two-window demo launch buttons ------------------------------------ */
+.ra-open-row {
+  display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px;
+}
+.ra-open-btn {
+  flex: 1 1 240px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 15px 20px;
+  border-radius: 14px;
+  font-size: 15.5px; font-weight: 700;
+  text-decoration: none !important;
+  color: #1a0f06 !important;
+  transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+}
+.ra-open-btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
+.ra-open-btn.is-mgr {
+  background: linear-gradient(135deg, var(--ra-brand), var(--ra-brand-2));
+  box-shadow: 0 8px 20px rgba(255, 122, 47, .34);
+}
+.ra-open-btn.is-drv {
+  color: #05231a !important;
+  background: linear-gradient(135deg, #34D399, #6EE7B7);
+  box-shadow: 0 8px 20px rgba(52, 211, 153, .3);
+}
+.ra-open-link {
+  display: inline-block; margin-top: 8px;
+  font-size: 12.5px; color: var(--ra-muted) !important;
+  text-decoration: none !important; border-bottom: 1px dashed var(--ra-border);
+}
+.ra-open-link:hover { color: var(--ra-brand-2) !important; }
+
+/* ---- assistant chat polish (AI-assistant inspired) --------------------- */
+/* Softer, glassier conversation bubbles with an avatar ring */
+[data-testid="stChatMessage"] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .02));
+  backdrop-filter: blur(2px);
+}
+[data-testid="stChatMessageAvatarCustom"],
+[data-testid="stChatMessage"] [data-testid="stChatMessageAvatar"] {
+  box-shadow: 0 0 0 2px rgba(255, 122, 47, .25);
+  border-radius: 50%;
+}
+/* toast notifications: lift them so completion pop-ups read clearly */
+[data-testid="stToast"] {
+  border: 1px solid var(--ra-border) !important;
+  box-shadow: var(--ra-shadow) !important;
+  border-radius: 14px !important;
+}
 
 /* Hide Deploy + hamburger; keep the top page nav (it lives in the same toolbar). */
 [data-testid="stAppDeployButton"],

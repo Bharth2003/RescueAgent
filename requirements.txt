@@ -2,3 +2,9 @@ streamlit>=1.57
 strands-agents
 boto3
 requests
+
+# Voice narration (am_michael, warm US male) — optional; the app degrades
+# gracefully if these or the model files are absent. Fetch the ~325 MB weights
+# once with: python scripts/fetch_voice_model.py
+kokoro-onnx>=0.4
+soundfile>=0.12

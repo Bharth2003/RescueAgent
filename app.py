@@ -22,6 +22,7 @@ import streamlit as st
 from strands import Agent
 from strands.models import BedrockModel
 
+import voice
 from broker import Broker
 from live_map import live_map
 from routing import get_route, haversine_km
@@ -34,6 +35,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 BEDROCK_MODEL_ID = "qwen.qwen3-235b-a22b-2507-v1:0"
 BEDROCK_REGION = "eu-west-2"
+BEDROCK_MODEL_NAME = "Qwen 3 235B"
 
 # Journey clock. Each leg plays for a fixed, watchable window on screen so a
 # narrated walkthrough runs to a predictable ~3 minutes end to end, rather than
@@ -107,8 +109,11 @@ def inject_css():
 
 def render_hero(avail, total, active, ai_on):
     """Branded header shown on every page — logo, title and live status chips."""
-    ai_chip = ('<span class="ra-chip is-brand"><b>AI</b> reasoning on</span>' if ai_on
-               else '<span class="ra-chip is-off"><b>AI</b> off · tools only</span>')
+    ai_chip = (
+        f'<span class="ra-chip is-brand"><b>{BEDROCK_MODEL_NAME}</b> · AWS Bedrock</span>'
+        if ai_on else
+        f'<span class="ra-chip is-off"><b>{BEDROCK_MODEL_NAME}</b> · tools only</span>'
+    )
     st.html(
         f"""
         <div class="ra-hero">
@@ -116,7 +121,7 @@ def render_hero(avail, total, active, ai_on):
             <div class="ra-logo">🍽</div>
             <div>
               <div class="ra-title">Rescue<span>Agent</span></div>
-              <div class="ra-sub">Edinburgh food rescue network · agentic dispatch</div>
+              <div class="ra-sub">Edinburgh food rescue · Strands Agents on Amazon Bedrock</div>
             </div>
           </div>
           <div class="ra-hero-chips">
@@ -242,6 +247,10 @@ def init_state():
         "mgr_restaurant": None,
         "mgr_food_text": "",
         "evt_cursor": 0,
+        "voice_on": voice.is_available(),   # narrate with am_michael when we can
+        "spoken_cursor": 0,                 # narration lines already voiced
+        "voice_primed": False,              # prime cursor to end on first mount
+        "voice_html": "",                   # last autoplay audio element (kept mounted)
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -994,6 +1003,40 @@ def flush_events(role, events):
     st.session_state["evt_cursor"] = len(events)
 
 
+def flush_events_all(events):
+    """Side-by-side view: pop every notification (manager, driver and both) so a
+    toast fires the moment each step of the work is done — dispatch, accept,
+    arrival, collection, delivery."""
+    cur = st.session_state.get("evt_cursor", 0)
+    for e in events[cur:]:
+        st.toast(f"**{e['title']}**  \n{e['body']}", icon=e.get("icon", "🛰"))
+    st.session_state["evt_cursor"] = len(events)
+
+
+def speak_narration(snap):
+    """Voice the newest agent narration with am_michael, kept mounted across the
+    1 s refresh so the clip plays to the end. No-op when voice is unavailable.
+
+    Synthesis runs inline, so we only ever voice the single latest line and never
+    a backlog: a session that joins mid-rescue is primed to the current end so it
+    speaks from there on, rather than blocking the render to read the whole log."""
+    if not st.session_state.get("voice_on"):
+        return
+    steps = snap.get("steps", [])
+    if not st.session_state.get("voice_primed"):
+        st.session_state["voice_primed"] = True
+        st.session_state["spoken_cursor"] = len(steps)
+    cur = st.session_state.get("spoken_cursor", 0)
+    if len(steps) > cur:
+        text = steps[-1]["text"]          # only the newest line, keeps it snappy
+        st.session_state["spoken_cursor"] = len(steps)
+        html = voice.audio_html(text, nonce=len(steps))
+        if html:
+            st.session_state["voice_html"] = html
+    if st.session_state.get("voice_html"):
+        st.html(st.session_state["voice_html"])
+
+
 def brk_map_plan(snap):
     """Map plan built from the shared broker delivery (mirrors map_plan)."""
     d = snap.get("delivery")
@@ -1197,6 +1240,9 @@ def render_manager_console():
             b.reset()
             st.session_state.mgr_restaurant = None
             st.session_state.mgr_food_text = ""
+            st.session_state.spoken_cursor = 0
+            st.session_state.voice_primed = False
+            st.session_state.voice_html = ""
             st.rerun()
 
     @st.fragment(run_every=1.0 if running else None)
@@ -1204,6 +1250,7 @@ def render_manager_console():
         b.tick()
         snap = b.snapshot()
         flush_events("manager", snap["events"])
+        speak_narration(snap)
         d = snap.get("delivery")
         left, right = st.columns([1, 1.15], gap="medium")
         with left:
@@ -1217,6 +1264,9 @@ def render_manager_console():
                         b.reset()
                         st.session_state.mgr_restaurant = None
                         st.session_state.mgr_food_text = ""
+                        st.session_state.spoken_cursor = 0
+                        st.session_state.voice_primed = False
+                        st.session_state.voice_html = ""
                         st.rerun()
         with right:
             live_map(brk_map_plan(snap), height=460, key="mgr_map")
@@ -1253,11 +1303,77 @@ def render_impact(snap):
 
 
 # ---------------------------------------------------------------- driver
+def render_driver_panel(b, d, key_prefix="drv"):
+    """The driver-side body: incoming offers or the assigned job card. Map and
+    stepper are drawn by the caller so this panel drops into any column."""
+    if not d:
+        st.subheader("No offers yet")
+        st.info("On shift and available. When a manager dispatches a rescue, the "
+                "offer pops up here — with a chime.")
+    elif d["phase"] == "broadcast":
+        st.markdown('<div class="ra-incoming">🔔 New pickup offer</div>',
+                    unsafe_allow_html=True)
+        sf = d["safety"]
+        with st.container(border=True):
+            st.markdown(f'**{sf["weight_kg"]} kg · {d["restaurant"]["name"]}**')
+            st.caption(f'Deliver to {d["shelter"]["name"]} · '
+                       f'FSA {sf["fsa_window_minutes"]} min'
+                       + (" · thermal bag needed" if sf["needs_hot"] else ""))
+        st.caption("Nearest available volunteers — tap Accept to take it:")
+        for o in d["offers"]:
+            with st.container(border=True):
+                oc1, oc2 = st.columns([3, 1])
+                with oc1:
+                    st.markdown(f'**{o["name"]}** · {o["distance_km"]:.1f} km')
+                    st.caption(f'{VEH.get(o["vehicle_type"], "")} · '
+                               f'{o["max_capacity_kg"]} kg · {o["rating"]}★')
+                with oc2:
+                    if o["status"] == "pending":
+                        if st.button("Accept", key=f'{key_prefix}_acc_{o["driver_id"]}',
+                                     type="primary", width="stretch"):
+                            b.accept(o["driver_id"])
+                            st.rerun()
+                    else:
+                        st.badge("Yours" if o["status"] == "won" else "Taken",
+                                 color="green" if o["status"] == "won" else "gray")
+    else:
+        w, r, s, ph = d["winner"], d["restaurant"], d["shelter"], d["phase"]
+        headline = {"to_pickup": "Drive to the pickup",
+                    "at_pickup": "Collect the food",
+                    "to_shelter": "Deliver to the shelter",
+                    "delivered": "Delivered — nice work"}[ph]
+        st.subheader(headline)
+        with st.container(border=True):
+            st.markdown(f'**{w["name"]}** · {VEH.get(w["vehicle_type"], "")}')
+            dest = r if ph in ("to_pickup", "at_pickup") else s
+            st.caption(f'{dest["name"]} — {dest.get("address","")}')
+            with st.container(horizontal=True):
+                st.badge(f'{d["safety"]["weight_kg"]} kg', color="gray")
+                if w.get("has_thermal_bag"):
+                    st.badge("Thermal bag", icon=":material/thermostat:", color="green")
+                st.badge(f'FSA {d["safety"]["fsa_window_minutes"]} min',
+                         icon=":material/timer:", color="orange")
+        if ph == "to_pickup":
+            if st.button("I've arrived at the kitchen", type="primary",
+                         icon=":material/flag:", width="stretch", key=f"{key_prefix}_arrive"):
+                b.arrive_now()
+                st.rerun()
+        elif ph == "at_pickup":
+            if st.button("Confirm food collected", type="primary",
+                         icon=":material/inventory_2:", width="stretch", key=f"{key_prefix}_collect"):
+                b.handover_now()
+                st.rerun()
+        elif ph == "delivered" and d.get("result"):
+            res = d["result"]
+            st.success(f'{res["meals"]} meals delivered · {res["total_km"]:.1f} km. '
+                       f'{w["name"]} is back on the available roster.')
+
+
 def render_driver_console():
     b = get_broker()
-    snap0 = b.snapshot()
-    d0 = snap0.get("delivery")
-    running = (d0 is None) or (d0["phase"] != "delivered")
+    # A driver on shift always listens, so the window keeps polling — it catches
+    # the next offer even after a previous rescue was delivered in this session.
+    running = True
 
     top1, top2 = st.columns([4, 1.1])
     with top1:
@@ -1271,79 +1387,101 @@ def render_driver_console():
         b.tick()
         snap = b.snapshot()
         flush_events("driver", snap["events"])
+        speak_narration(snap)
         d = snap.get("delivery")
         # Map is always on top so the driver can watch the whole journey.
         live_map(brk_map_plan(snap), height=380, key="drv_map")
         if d:
             render_stepper(PHASE_STAGE[d["phase"]])
         st.divider()
-        if True:
-            if not d:
-                st.subheader("No offers yet")
-                st.info("You're on shift and available. When a manager dispatches a "
-                        "rescue, the offer pops up here — with a chime.")
-            elif d["phase"] == "broadcast":
-                st.markdown('<div class="ra-incoming">🔔 New pickup offer</div>',
-                            unsafe_allow_html=True)
-                sf = d["safety"]
-                with st.container(border=True):
-                    st.markdown(f'**{sf["weight_kg"]} kg · {d["restaurant"]["name"]}**')
-                    st.caption(f'Deliver to {d["shelter"]["name"]} · '
-                               f'FSA {sf["fsa_window_minutes"]} min'
-                               + (" · thermal bag needed" if sf["needs_hot"] else ""))
-                st.caption("Nearest available volunteers — tap Accept to take it:")
-                for o in d["offers"]:
-                    with st.container(border=True):
-                        oc1, oc2 = st.columns([3, 1])
-                        with oc1:
-                            st.markdown(f'**{o["name"]}** · {o["distance_km"]:.1f} km')
-                            st.caption(f'{VEH.get(o["vehicle_type"], "")} · '
-                                       f'{o["max_capacity_kg"]} kg · {o["rating"]}★')
-                        with oc2:
-                            if o["status"] == "pending":
-                                if st.button("Accept", key=f'drv_acc_{o["driver_id"]}',
-                                             type="primary", width="stretch"):
-                                    b.accept(o["driver_id"])
-                                    st.rerun()
-                            else:
-                                st.badge("Yours" if o["status"] == "won" else "Taken",
-                                         color="green" if o["status"] == "won" else "gray")
-            else:
-                w, r, s, ph = d["winner"], d["restaurant"], d["shelter"], d["phase"]
-                headline = {"to_pickup": "Drive to the pickup",
-                            "at_pickup": "Collect the food",
-                            "to_shelter": "Deliver to the shelter",
-                            "delivered": "Delivered — nice work"}[ph]
-                st.subheader(headline)
-                with st.container(border=True):
-                    st.markdown(f'**{w["name"]}** · {VEH.get(w["vehicle_type"], "")}')
-                    dest = r if ph in ("to_pickup", "at_pickup") else s
-                    st.caption(f'{dest["name"]} — {dest.get("address","")}')
-                    with st.container(horizontal=True):
-                        st.badge(f'{d["safety"]["weight_kg"]} kg', color="gray")
-                        if w.get("has_thermal_bag"):
-                            st.badge("Thermal bag", icon=":material/thermostat:", color="green")
-                        st.badge(f'FSA {d["safety"]["fsa_window_minutes"]} min',
-                                 icon=":material/timer:", color="orange")
-                if ph == "to_pickup":
-                    if st.button("I've arrived at the kitchen", type="primary",
-                                 icon=":material/flag:", width="stretch", key="drv_arrive"):
-                        b.arrive_now()
-                        st.rerun()
-                elif ph == "at_pickup":
-                    if st.button("Confirm food collected", type="primary",
-                                 icon=":material/inventory_2:", width="stretch", key="drv_collect"):
-                        b.handover_now()
-                        st.rerun()
-                elif ph == "delivered" and d.get("result"):
-                    res = d["result"]
-                    st.success(f'{res["meals"]} meals delivered · {res["total_km"]:.1f} km. '
-                               "You're back on the available roster.")
+        render_driver_panel(b, d)
+    frag()
+
+
+# ------------------------------------------------ side-by-side live console
+def render_live_console():
+    """Manager (left) and Driver (right) in one view, watching the same live
+    map. The agent narrates aloud with am_michael, and every completed step —
+    dispatch, accept, arrival, collection, delivery — pops a notification."""
+    b = get_broker()
+    snap0 = b.snapshot()
+    d0 = snap0.get("delivery")
+    running = (d0 is None) or (d0["phase"] != "delivered")
+
+    top1, top2, top3 = st.columns([3.4, 1.5, 1.1])
+    with top1:
+        st.header("Live rescue — Manager & Driver")
+        st.caption("Both sides on one screen, watching the same map. The agent "
+                   "narrates aloud and notifies each side as the work completes.")
+    with top2:
+        if voice.is_available():
+            st.session_state.voice_on = st.toggle(
+                "Voice (am_michael)", value=st.session_state.get("voice_on", True),
+                key="live_voice", help="Warm US male narration of the agent's steps.")
+        else:
+            st.caption("Voice model not installed")
+    with top3:
+        if st.button("Reset", icon=":material/restart_alt:", width="stretch", key="live_reset"):
+            b.reset()
+            st.session_state.mgr_restaurant = None
+            st.session_state.mgr_food_text = ""
+            st.session_state.spoken_cursor = 0
+            st.session_state.voice_primed = False
+            st.session_state.voice_html = ""
+            st.rerun()
+
+    @st.fragment(run_every=1.0 if running else None)
+    def frag():
+        b.tick()
+        snap = b.snapshot()
+        flush_events_all(snap["events"])
+        speak_narration(snap)
+        d = snap.get("delivery")
+
+        # Shared live map both sides watch, with the journey stepper beneath it.
+        live_map(brk_map_plan(snap), height=440, key="live_map")
+        if d:
+            render_stepper(PHASE_STAGE[d["phase"]])
+
+        mcol, dcol = st.columns(2, gap="large")
+        with mcol:
+            st.markdown('<div class="ra-console-tag is-mgr">🧑‍🍳 Manager console</div>',
+                        unsafe_allow_html=True)
+            with st.container(border=True):
+                if not d:
+                    render_dispatch_form()
+                else:
+                    render_manager_status(d)
+                    if d["phase"] == "delivered":
+                        if st.button("Start another rescue", type="primary",
+                                     width="stretch", key="live_again"):
+                            b.reset()
+                            st.session_state.mgr_restaurant = None
+                            st.session_state.mgr_food_text = ""
+                            st.session_state.spoken_cursor = 0
+                            st.session_state.voice_primed = False
+                            st.session_state.voice_html = ""
+                            st.rerun()
+        with dcol:
+            st.markdown('<div class="ra-console-tag is-drv">🛵 Driver app</div>',
+                        unsafe_allow_html=True)
+            with st.container(border=True):
+                render_driver_panel(b, d, key_prefix="live")
+
+        # The agent — styled as the assistant that speaks — sits under both.
+        st.markdown('<div class="ra-console-tag is-agent">🤖 Agent · '
+                    'Strands Agents · Amazon Bedrock Qwen 3 235B</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            brk_narration(snap, height=240)
+
+        render_impact(snap)
     frag()
 
 
 # ---------------------------------------------------------------- login
 def render_login():
+    # One window per user: pick a role to sign in here, or open a role in its
+    # own tab for the two-window demo.
     c1, c2, c3 = st.columns(3)
     with c1:
         with st.container(border=True):
@@ -1352,6 +1490,8 @@ def render_login():
             if st.button("Log in as Manager", type="primary", width="stretch", key="login_mgr"):
                 st.query_params["role"] = "manager"
                 st.rerun()
+            st.markdown('<a class="ra-open-link" href="?role=manager" target="_blank" '
+                        'rel="noopener">open in its own window ↗</a>', unsafe_allow_html=True)
     with c2:
         with st.container(border=True):
             st.subheader("🛵 Driver")
@@ -1359,13 +1499,22 @@ def render_login():
             if st.button("Log in as Driver", type="primary", width="stretch", key="login_drv"):
                 st.query_params["role"] = "driver"
                 st.rerun()
+            st.markdown('<a class="ra-open-link" href="?role=driver" target="_blank" '
+                        'rel="noopener">open in its own window ↗</a>', unsafe_allow_html=True)
     with c3:
         with st.container(border=True):
             st.subheader("📊 Operations")
-            st.caption("The full multi-page operations dashboard (shelters, drivers, history).")
-            if st.button("Open operations view", width="stretch", key="login_ops"):
+            st.caption("The full multi-page operations dashboard — shelters, drivers, history.")
+            if st.button("Open operations", width="stretch", key="login_ops"):
                 st.query_params["role"] = "ops"
                 st.rerun()
+            if st.button("Same-screen side-by-side", width="stretch", key="login_live"):
+                st.query_params["role"] = "live"
+                st.rerun()
+    st.caption(
+        f"Agent: **Strands Agents SDK** · model: **Amazon Bedrock {BEDROCK_MODEL_NAME}** "
+        f"(`{BEDROCK_MODEL_ID}`, `{BEDROCK_REGION}`)."
+    )
 
 
 # ---------------------------------------------------------------- header + nav
@@ -1403,6 +1552,7 @@ def role_sidebar(role):
         st.subheader("Session")
         st.caption({"manager": "Signed in as **Manager** 🧑\u200d🍳",
                     "driver": "Signed in as **Driver** 🛵",
+                    "live": "**Live demo** — Manager & Driver 🧑\u200d🍳🛵",
                     "ops": "**Operations** dashboard 📊"}.get(role, ""))
         if st.button("Switch view / log out", icon=":material/logout:", width="stretch"):
             st.query_params.clear()
@@ -1410,9 +1560,20 @@ def role_sidebar(role):
             st.rerun()
         st.divider()
         st.subheader("Settings")
+        if role in ("manager", "driver") and voice.is_available():
+            st.session_state.voice_on = st.toggle(
+                "Voice (am_michael)", value=st.session_state.get("voice_on", True),
+                key="sb_voice",
+                help="Warm US male narration of the agent's steps. If both windows "
+                     "are on one screen, mute one to avoid an echo.")
         st.session_state.use_bedrock = st.toggle(
             "AI reasoning", value=st.session_state.use_bedrock,
-            help="Off = deterministic tool pipeline only, no network call.")
+            help="On = Strands Agents SDK calls Amazon Bedrock "
+                 f"{BEDROCK_MODEL_NAME}. Off = deterministic tool pipeline only, "
+                 "no network call.")
+        st.caption(
+            f"Model: **Amazon Bedrock {BEDROCK_MODEL_NAME}** · `{BEDROCK_REGION}`"
+        )
         st.caption("Each ride leg plays for about 20–30 seconds, so a full rescue "
                    "runs in roughly three minutes.")
 
@@ -1421,9 +1582,9 @@ inject_css()
 role = st.query_params.get("role")
 _show_hero = st.query_params.get("hero") != "off"
 
-if role in ("manager", "driver", "ops"):
+if role in ("manager", "driver", "ops", "live"):
     _snap = get_broker().snapshot()
-    _active = brk_active(_snap) if role in ("manager", "driver") else (
+    _active = brk_active(_snap) if role in ("manager", "driver", "live") else (
         1 if st.session_state.delivery and
         st.session_state.delivery["phase"] != "delivered" else 0)
     if _show_hero:
@@ -1433,6 +1594,8 @@ if role in ("manager", "driver", "ops"):
         render_manager_console()
     elif role == "driver":
         render_driver_console()
+    elif role == "live":
+        render_live_console()
     else:
         run_ops_nav()
 else:
