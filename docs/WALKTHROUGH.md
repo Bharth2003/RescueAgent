@@ -220,7 +220,9 @@ the judging criteria ask for — visible input, visible tool, visible return.
 ### 3.6 The offline switch
 
 ```python
-st.session_state.use_bedrock = st.toggle("Call Bedrock agent", value=True)
+st.session_state.use_bedrock = st.toggle("AI reasoning", value=True)
+# On: Strands Agents SDK → Amazon Bedrock Qwen 3 235B
+#     (qwen.qwen3-235b-a22b-2507-v1:0, eu-west-2)
 ```
 
 Off, `launch_rescue()` calls the tools directly and skips the model. Same classification,
