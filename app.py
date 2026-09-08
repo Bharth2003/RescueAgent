@@ -35,6 +35,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 BEDROCK_MODEL_ID = "qwen.qwen3-235b-a22b-2507-v1:0"
 BEDROCK_REGION = "eu-west-2"
+BEDROCK_MODEL_NAME = "Qwen 3 235B"
 
 # Journey clock. Each leg plays for a fixed, watchable window on screen so a
 # narrated walkthrough runs to a predictable ~3 minutes end to end, rather than
@@ -108,8 +109,11 @@ def inject_css():
 
 def render_hero(avail, total, active, ai_on):
     """Branded header shown on every page — logo, title and live status chips."""
-    ai_chip = ('<span class="ra-chip is-brand"><b>AI</b> reasoning on</span>' if ai_on
-               else '<span class="ra-chip is-off"><b>AI</b> off · tools only</span>')
+    ai_chip = (
+        f'<span class="ra-chip is-brand"><b>{BEDROCK_MODEL_NAME}</b> · AWS Bedrock</span>'
+        if ai_on else
+        f'<span class="ra-chip is-off"><b>{BEDROCK_MODEL_NAME}</b> · tools only</span>'
+    )
     st.html(
         f"""
         <div class="ra-hero">
@@ -117,7 +121,7 @@ def render_hero(avail, total, active, ai_on):
             <div class="ra-logo">🍽</div>
             <div>
               <div class="ra-title">Rescue<span>Agent</span></div>
-              <div class="ra-sub">Edinburgh food rescue network · agentic dispatch</div>
+              <div class="ra-sub">Edinburgh food rescue · Strands Agents on Amazon Bedrock</div>
             </div>
           </div>
           <div class="ra-hero-chips">
@@ -1466,7 +1470,7 @@ def render_live_console():
 
         # The agent — styled as the assistant that speaks — sits under both.
         st.markdown('<div class="ra-console-tag is-agent">🤖 Agent · '
-                    'speaking with am_michael</div>', unsafe_allow_html=True)
+                    'Strands Agents · Amazon Bedrock Qwen 3 235B</div>', unsafe_allow_html=True)
         with st.container(border=True):
             brk_narration(snap, height=240)
 
@@ -1507,6 +1511,10 @@ def render_login():
             if st.button("Same-screen side-by-side", width="stretch", key="login_live"):
                 st.query_params["role"] = "live"
                 st.rerun()
+    st.caption(
+        f"Agent: **Strands Agents SDK** · model: **Amazon Bedrock {BEDROCK_MODEL_NAME}** "
+        f"(`{BEDROCK_MODEL_ID}`, `{BEDROCK_REGION}`)."
+    )
 
 
 # ---------------------------------------------------------------- header + nav
@@ -1560,7 +1568,12 @@ def role_sidebar(role):
                      "are on one screen, mute one to avoid an echo.")
         st.session_state.use_bedrock = st.toggle(
             "AI reasoning", value=st.session_state.use_bedrock,
-            help="Off = deterministic tool pipeline only, no network call.")
+            help="On = Strands Agents SDK calls Amazon Bedrock "
+                 f"{BEDROCK_MODEL_NAME}. Off = deterministic tool pipeline only, "
+                 "no network call.")
+        st.caption(
+            f"Model: **Amazon Bedrock {BEDROCK_MODEL_NAME}** · `{BEDROCK_REGION}`"
+        )
         st.caption("Each ride leg plays for about 20–30 seconds, so a full rescue "
                    "runs in roughly three minutes.")
 
