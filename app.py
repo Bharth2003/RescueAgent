@@ -1476,36 +1476,37 @@ def render_live_console():
 
 # ---------------------------------------------------------------- login
 def render_login():
-    # Featured path: the two-window demo — one window per user, side by side.
-    with st.container(border=True):
-        st.markdown('<div class="ra-login-title">🧑‍🍳🛵 Two-window demo — one window '
-                    'per user</div>', unsafe_allow_html=True)
-        st.markdown('<div class="ra-login-sub">Open each user in its own browser window '
-                    'and place them side by side. The <b>Manager</b> dispatches; the '
-                    '<b>Driver</b> receives the offer, accepts and delivers — both watching '
-                    'the same live map. Each window narrates the agent aloud with '
-                    '<b>am_michael</b> (warm US) and pops a notification as every step '
-                    'completes. On a single screen, mute one window\'s voice to avoid an '
-                    'echo.</div>', unsafe_allow_html=True)
-        st.html(
-            '<div class="ra-open-row">'
-            '  <a class="ra-open-btn is-mgr" href="?role=manager" target="_blank" '
-            'rel="noopener">🧑‍🍳 Open Manager window ↗</a>'
-            '  <a class="ra-open-btn is-drv" href="?role=driver" target="_blank" '
-            'rel="noopener">🛵 Open Driver window ↗</a>'
-            '</div>'
-        )
-    st.caption("Prefer one screen? Open the combined side-by-side view, or the full "
-               "operations dashboard:")
-    c1, c2 = st.columns(2)
+    # One window per user: pick a role to sign in here, or open a role in its
+    # own tab for the two-window demo.
+    c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("🖥 Same-screen side-by-side", width="stretch", key="login_live"):
-            st.query_params["role"] = "live"
-            st.rerun()
+        with st.container(border=True):
+            st.subheader("🧑‍🍳 Manager")
+            st.caption("A kitchen manager reporting surplus food and dispatching a rescue.")
+            if st.button("Log in as Manager", type="primary", width="stretch", key="login_mgr"):
+                st.query_params["role"] = "manager"
+                st.rerun()
+            st.markdown('<a class="ra-open-link" href="?role=manager" target="_blank" '
+                        'rel="noopener">open in its own window ↗</a>', unsafe_allow_html=True)
     with c2:
-        if st.button("📊 Operations dashboard", width="stretch", key="login_ops"):
-            st.query_params["role"] = "ops"
-            st.rerun()
+        with st.container(border=True):
+            st.subheader("🛵 Driver")
+            st.caption("A volunteer driver on shift, receiving and accepting pickup offers.")
+            if st.button("Log in as Driver", type="primary", width="stretch", key="login_drv"):
+                st.query_params["role"] = "driver"
+                st.rerun()
+            st.markdown('<a class="ra-open-link" href="?role=driver" target="_blank" '
+                        'rel="noopener">open in its own window ↗</a>', unsafe_allow_html=True)
+    with c3:
+        with st.container(border=True):
+            st.subheader("📊 Operations")
+            st.caption("The full multi-page operations dashboard — shelters, drivers, history.")
+            if st.button("Open operations", width="stretch", key="login_ops"):
+                st.query_params["role"] = "ops"
+                st.rerun()
+            if st.button("Same-screen side-by-side", width="stretch", key="login_live"):
+                st.query_params["role"] = "live"
+                st.rerun()
 
 
 # ---------------------------------------------------------------- header + nav

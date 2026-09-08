@@ -35,6 +35,14 @@
   background: transparent;
 }
 
+/* Ambient AI-assistant backdrop: soft warm glow top-left, cool depth bottom */
+[data-testid="stAppViewContainer"] {
+  background:
+    radial-gradient(1100px 520px at 12% -8%, rgba(255, 122, 47, .10), transparent 55%),
+    radial-gradient(900px 600px at 98% 108%, rgba(96, 165, 250, .07), transparent 55%),
+    var(--ra-bg);
+}
+
 /* ---- branded hero ------------------------------------------------------- */
 .ra-hero {
   display: flex;
@@ -302,6 +310,12 @@ button[data-testid="stBaseButton-secondary"]:hover {
   background: linear-gradient(135deg, #34D399, #6EE7B7);
   box-shadow: 0 8px 20px rgba(52, 211, 153, .3);
 }
+.ra-open-link {
+  display: inline-block; margin-top: 8px;
+  font-size: 12.5px; color: var(--ra-muted) !important;
+  text-decoration: none !important; border-bottom: 1px dashed var(--ra-border);
+}
+.ra-open-link:hover { color: var(--ra-brand-2) !important; }
 
 /* ---- assistant chat polish (AI-assistant inspired) --------------------- */
 /* Softer, glassier conversation bubbles with an avatar ring */
