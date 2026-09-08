@@ -14,9 +14,7 @@ has capacity, then broadcasts the job to the three nearest volunteers who can ac
 carry it. The first to accept gets a road route, and both sides watch the same live map
 until the food is signed for.
 
-## Demo video
-
-[Watch the demo](docs/rescueagent-demo.mp4) — **Strands Agents SDK** on **Amazon Bedrock Qwen 3 235B**.
+**Strands Agents SDK** on **Amazon Bedrock Qwen 3 235B**.
 
 A kitchen types one sentence. The agent classifies leftover food against UK FSA rules,
 matches a shelter, and a volunteer driver takes it across Edinburgh on a live map.
