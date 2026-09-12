@@ -30,6 +30,7 @@ input,textarea{font-family:inherit}
 .leaflet-tooltip-top:before{border-top-color:#2A303A!important}
 .leaflet-control-attribution{background:rgba(14,16,19,.8)!important;color:#5B626C!important}
 .leaflet-control-attribution a{color:#7A828D!important}
+.leaflet-div-icon.ra-pin,.leaflet-marker-icon.ra-pin{background:transparent!important;border:none!important}
 .rv::-webkit-scrollbar{width:8px;height:8px}
 .rv::-webkit-scrollbar-track{background:transparent}
 .rv::-webkit-scrollbar-thumb{background:#2A303A;border-radius:8px}
@@ -301,6 +302,9 @@ input,textarea{font-family:inherit}
                 <div style="font-size:12px;color:#9BA3AE;font-weight:600">{{ hud.etaUnit }}</div>
               </div>
               <div style="margin-top:6px;font-size:12px;color:#9BA3AE">{{ hud.dist }}</div>
+              <sc-if value="{{ hud.fromTo }}">
+                <div style="margin-top:8px;font-size:11px;font-weight:600;color:#E9EBEE;line-height:1.4">{{ hud.fromTo }}</div>
+              </sc-if>
               <div style="margin-top:10px;height:4px;border-radius:2px;background:#23272F;overflow:hidden">
                 <div style="height:100%;width:{{ hud.pct }};background:#FF7A2F;transition:width .14s linear"></div>
               </div>
@@ -309,8 +313,10 @@ input,textarea{font-family:inherit}
             <div style="position:absolute;bottom:12px;left:12px;z-index:500;background:#12151Aee;border:1px solid #2A303A;border-radius:7px;padding:9px 12px;display:flex;flex-direction:column;gap:5px;font-size:11px;color:#9BA3AE">
               <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#34D399"></span>Available driver</div>
               <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#5B626C"></span>Busy / off duty</div>
-              <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#FF7A2F"></span>Pickup kitchen</div>
-              <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#A78BFA"></span>Shelter</div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="width:10px;height:10px;border-radius:50%;background:#FF7A2F;box-shadow:0 0 0 3px rgba(255,122,47,.35)"></span>Live driver</div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="width:16px;height:3px;border-radius:2px;background:#FF7A2F"></span>Live route</div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#FF7A2F"></span>FROM · kitchen</div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:#A78BFA"></span>TO · shelter</div>
             </div>
           </div>
         </div>
@@ -624,7 +630,7 @@ class Component extends DCLogic {
     basemap:"standard",
   };
   _timers=[];
-  _setMapEl=(el)=>{ if(!el) return; this._mapEl=el; if(window.L) this._initMap(); };
+  _setMapEl=(el)=>{ if(!el) return; this._mapEl=el; if(window.L) this._ensureMap(); };
 
   componentDidMount(){
     Promise.all([
@@ -649,20 +655,50 @@ class Component extends DCLogic {
   _now(){ return new Date().toLocaleTimeString("en-GB",{hour12:false}); }
 
   _waitL(n=0){
-    if(window.L && this._mapEl){ this._initMap(); return; }
+    if(window.L && this._mapEl){ this._ensureMap(); return; }
     if(n>150) return;
     setTimeout(()=>this._waitL(n+1),100);
   }
+  _ensureMap(){
+    if(!window.L||!this._mapEl) return null;
+    try{
+      if(this._map && this._map.getContainer()!==this._mapEl){
+        try{ this._map.remove(); }catch(e){}
+        this._map=null; this._fleet=null; this._trip=null; this._car=null; this._tiles=null;
+        this._remainHalo=this._remainLine=this._remainCore=null;
+      }
+    }catch(e){}
+    if(!this._map) this._initMap();
+    return this._map;
+  }
   _initMap(){
-    if(this._map||!this._mapEl) return;
+    if(!this._mapEl||!window.L) return;
+    if(this._map){
+      this._later(()=>{
+        if(!this._map) return;
+        try{ this._map.invalidateSize(); }catch(e){}
+        if(this.state.winner&&this.state.restaurant) this.paintTrip();
+      },80);
+      return;
+    }
     const L=window.L;
     this._map=L.map(this._mapEl,{zoomControl:false}).setView([55.9490,-3.1900],12);
     L.control.zoom({position:"bottomright"}).addTo(this._map);
     this._setTiles(this.state.basemap);
     this._fleet=L.layerGroup().addTo(this._map);
     this._trip=L.layerGroup().addTo(this._map);
+    try{
+      if(!this._map.getPane("tripGlow")){
+        this._map.createPane("tripGlow");
+        this._map.getPane("tripGlow").style.zIndex=450;
+      }
+    }catch(e){}
     this.paintIdle();
-    this._later(()=>this._map.invalidateSize(),300);
+    this._later(()=>{
+      if(!this._map) return;
+      try{ this._map.invalidateSize(); }catch(e){}
+      if(this.state.winner&&this.state.restaurant) this.paintTrip();
+    },300);
   }
   _setTiles(kind){
     if(!this._map) return;
@@ -673,68 +709,158 @@ class Component extends DCLogic {
   }
   setBasemap=(kind)=>()=>{ this.setState({basemap:kind},()=>this._setTiles(kind)); };
 
+  _esc(s){ return String(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+  _ll(obj){
+    if(obj==null) return null;
+    if(Array.isArray(obj)&&obj.length>=2){
+      let a=+obj[0], b=+obj[1];
+      if(!Number.isFinite(a)||!Number.isFinite(b)) return null;
+      if(Math.abs(a)<20&&Math.abs(b)>20) return [b,a];
+      return [a,b];
+    }
+    const lat=+(obj.lat??obj.latitude??obj.current_lat);
+    const lng=+(obj.lng??obj.lon??obj.longitude??obj.current_lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng)) return null;
+    if(Math.abs(lat)<20&&Math.abs(lng)>20) return [lng,lat];
+    return [lat,lng];
+  }
+  _coords(list){
+    if(!Array.isArray(list)) return [];
+    return list.map(c=>this._ll(c)).filter(Boolean);
+  }
   _dotIcon(color,size,dim){
-    return window.L.divIcon({className:"",iconSize:[size,size],iconAnchor:[size/2,size/2],
+    return window.L.divIcon({className:"ra-pin",iconSize:[size,size],iconAnchor:[size/2,size/2],
       html:`<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:1.5px solid ${INK};box-shadow:0 0 0 1px rgba(255,255,255,.12);opacity:${dim?0.45:1}"></div>`});
   }
-  _sqIcon(color,label,pulse){
-    const ring=pulse?`<div style="position:absolute;inset:-8px;border-radius:50%;border:3px solid ${color};animation:pulseRing 1.5s ease-out infinite"></div>`:"";
-    return window.L.divIcon({className:"",iconSize:[34,34],iconAnchor:[17,17],
-      html:`<div style="position:relative;width:34px;height:34px;display:grid;place-items:center">${ring}<div style="width:31px;height:31px;border-radius:7px;background:${color};border:2px solid ${INK};box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;place-items:center;font:700 10px/1 'Instrument Sans',sans-serif;color:${INK}">${label}</div></div>`});
+  _pinIcon(color,badge,title,sub){
+    const ring=`<div style="position:absolute;left:2px;top:2px;width:28px;height:28px;border-radius:50%;border:2px solid ${color};animation:pulseRing 1.6s ease-out infinite"></div>`;
+    return window.L.divIcon({className:"ra-pin",iconSize:[168,52],iconAnchor:[16,40],
+      html:`<div style="position:relative;display:flex;align-items:flex-start;gap:6px;pointer-events:none"><div style="position:relative;width:32px;height:32px;flex:none">${ring}<div style="position:relative;width:28px;height:28px;border-radius:7px;background:${color};border:2px solid ${INK};box-shadow:0 4px 14px rgba(0,0,0,.7);display:grid;place-items:center;font:700 11px/1 'Instrument Sans',sans-serif;color:${INK}">${this._esc(badge)}</div></div><div style="background:#12151Af2;border:1px solid #2A303A;border-radius:7px;padding:4px 8px;max-width:128px;box-shadow:0 6px 18px rgba(0,0,0,.45)"><div style="font:700 8px/1 'Instrument Sans',sans-serif;letter-spacing:.08em;color:${color}">${this._esc(sub)}</div><div style="font:600 11px/1.25 'Instrument Sans',sans-serif;color:#E9EBEE;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:112px;margin-top:2px">${this._esc(title)}</div></div></div>`});
   }
-  _carIcon(label){
-    return window.L.divIcon({className:"",iconSize:[42,42],iconAnchor:[21,21],
-      html:`<div style="position:relative;width:42px;height:42px;display:grid;place-items:center"><div style="position:absolute;inset:4px;border-radius:50%;border:3px solid ${BRAND};animation:pulseRing 1.7s ease-out infinite"></div><div style="position:relative;width:28px;height:28px;border-radius:50%;background:${BRAND};border:2.5px solid ${INK};box-shadow:0 3px 12px rgba(0,0,0,.6);display:grid;place-items:center;font:700 8px/1 'Instrument Sans',sans-serif;color:${INK}">${label}</div></div>`});
+  _carIcon(label,name){
+    return window.L.divIcon({className:"ra-pin",iconSize:[176,58],iconAnchor:[22,22],
+      html:`<div style="position:relative;display:flex;align-items:center;gap:7px;pointer-events:none"><div style="position:relative;width:44px;height:44px;flex:none;display:grid;place-items:center"><div style="position:absolute;inset:0;border-radius:50%;border:3px solid ${BRAND};animation:pulseRing 1.5s ease-out infinite"></div><div style="position:relative;width:34px;height:34px;border-radius:50%;background:${BRAND};border:3px solid #fff;box-shadow:0 0 0 3px rgba(255,122,47,.4),0 5px 16px rgba(0,0,0,.65);display:grid;place-items:center;font:700 8px/1 'Instrument Sans',sans-serif;color:${INK}">${this._esc(label)}</div></div><div style="background:#FF7A2F;color:${INK};border-radius:7px;padding:4px 8px;box-shadow:0 6px 18px rgba(0,0,0,.5);max-width:124px"><div style="font:700 8px/1 'Instrument Sans',sans-serif;letter-spacing:.08em">LIVE DRIVER</div><div style="font:700 11px/1.25 'Instrument Sans',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:108px;margin-top:2px">${this._esc(name||"Driver")}</div></div></div>`});
   }
 
   paintIdle(){
-    if(!this._map||!this._fleet) return;
+    if(!this._ensureMap()||!this._fleet) return;
     const L=window.L, dim=this.state.phase!=="idle", win=this.state.winner;
     this._fleet.clearLayers();
     this.state.drivers.forEach(d=>{
-      if(!d.current_lat) return;
-      if(win&&d.id===win.id) return;
+      const pt=this._ll(d);
+      if(!pt) return;
+      if(win&&(d.id===win.id||d.driver_id===win.id)) return;
       const on=d.status==="available";
-      L.marker([d.current_lat,d.current_lng],{icon:this._dotIcon(on?GREEN:"#5B626C",on?11:8,dim)})
+      L.marker(pt,{icon:this._dotIcon(on?GREEN:"#5B626C",on?11:8,dim)})
         .bindTooltip(`${d.name} · ${VEH[d.vehicle_type]||d.vehicle_type} · ${String(d.status).replace("_"," ")}`,{direction:"top"})
         .addTo(this._fleet);
     });
   }
 
-  paintTrip(){
-    if(!this._map||!this._trip) return;
-    const L=window.L, {restaurant,shelter,legs,phase,winner}=this.state;
+  paintTrip(opts){
+    opts=opts||{};
+    if(!this._ensureMap()||!this._trip) return;
+    const L=window.L, {restaurant,shelter,legs,phase,winner,legIndex,progress}=this.state;
     this._trip.clearLayers(); this._car=null;
-    if(!restaurant||!shelter) return;
+    this._remainHalo=this._remainLine=this._remainCore=null;
+    if(!restaurant&&!shelter&&!winner) return;
     try{
-      const ok=(p)=>p&&Number.isFinite(+p[0])&&Number.isFinite(+p[1]);
-      if(legs[0]&&legs[0].coords&&legs[0].coords.length>1) L.polyline(legs[0].coords,{color:"#7A828D",weight:3.5,opacity:.8,dashArray:"7 8"}).addTo(this._trip);
-      if(legs[1]&&legs[1].coords&&legs[1].coords.length>1) L.polyline(legs[1].coords,{color:BRAND,weight:5,opacity:.95}).addTo(this._trip);
-      if(ok([restaurant.lat,restaurant.lng])) L.marker([+restaurant.lat,+restaurant.lng],{icon:this._sqIcon(BRAND,"P",phase==="at_pickup")}).bindTooltip(restaurant.name||"Pickup",{direction:"top"}).addTo(this._trip);
-      if(ok([shelter.lat,shelter.lng])) L.marker([+shelter.lat,+shelter.lng],{icon:this._sqIcon(VIOLET,"S",phase==="delivered")}).bindTooltip(shelter.name||"Shelter",{direction:"top"}).addTo(this._trip);
-      if(winner){
-        const c0=legs[this.state.legIndex]&&legs[this.state.legIndex].coords&&legs[this.state.legIndex].coords[0];
-        const start=ok(c0)?c0:[winner.current_lat,winner.current_lng];
-        if(ok(start)){
-          this._car=L.marker(start,{icon:this._carIcon(VEH[winner.vehicle_type]||"DRV"),zIndexOffset:900})
-            .bindTooltip(`${winner.name||"Driver"} · ${VEH[winner.vehicle_type]||winner.vehicle_type||""}`,{direction:"top"}).addTo(this._trip);
-        }
+      const kit=this._ll(restaurant);
+      const sh=this._ll(shelter);
+      const drv=this._ll(winner);
+      const pickup=this._coords(legs[0]&&legs[0].coords);
+      const drop=this._coords(legs[1]&&legs[1].coords);
+      const toPickup=phase==="to_pickup"||phase==="routing"||phase==="broadcast";
+      const atKit=phase==="at_pickup";
+      const toShel=phase==="to_shelter"||phase==="delivered";
+      const p=Math.max(0,Math.min(1,progress||0));
+      const pathA=pickup.length>=2?pickup:(drv&&kit?this._synth(drv,kit):[]);
+      const pathB=drop.length>=2?drop:(kit&&sh?this._synth(kit,sh):[]);
+      let remaining=[], done=[], here=null;
+
+      if(toPickup||atKit){
+        const t=atKit?1:p;
+        if(pathA.length>=2){
+          here=this._at(pathA,t);
+          done=this._rest(pathA,0,t);
+          remaining=this._rest(pathA,t,1);
+        }else if(drv&&kit){ remaining=[drv,kit]; here=drv; }
+        if(pathB.length>=2) L.polyline(pathB,{color:VIOLET,weight:4,opacity:.35,dashArray:"6 10"}).addTo(this._trip);
+        else if(kit&&sh) L.polyline([kit,sh],{color:VIOLET,weight:4,opacity:.35,dashArray:"6 10"}).addTo(this._trip);
+      }else{
+        if(pathA.length>=2) L.polyline(pathA,{color:"#7A828D",weight:4,opacity:.4,dashArray:"6 8"}).addTo(this._trip);
+        const t=phase==="delivered"?1:p;
+        if(pathB.length>=2){
+          here=this._at(pathB,t);
+          done=this._rest(pathB,0,t);
+          remaining=this._rest(pathB,t,1);
+        }else if(kit&&sh){
+          remaining=[this._at([kit,sh],t)||kit, sh];
+          here=remaining[0];
+        }else if(drv&&sh){ remaining=[drv,sh]; here=drv; }
+      }
+      if(remaining.length<2){
+        if((toPickup||atKit)&&drv&&kit) remaining=[drv,kit];
+        else if(kit&&sh) remaining=[kit,sh];
+        else if(drv&&sh) remaining=[drv,sh];
+      }
+      if(done.length>=2) L.polyline(done,{color:"#FFB489",weight:5,opacity:.35,lineJoin:"round"}).addTo(this._trip);
+      if(remaining.length>=2){
+        this._remainHalo=L.polyline(remaining,{color:"#0E1013",weight:14,opacity:.55,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
+        this._remainLine=L.polyline(remaining,{color:BRAND,weight:8,opacity:1,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
+        this._remainCore=L.polyline(remaining,{color:"#FFE0C2",weight:3,opacity:.95,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
+      }
+      if(kit){
+        const sub=toShel?"FROM · PICKED UP":"FROM · PICKUP";
+        L.marker(kit,{icon:this._pinIcon(BRAND,"P",restaurant&&restaurant.name||"Kitchen",sub),zIndexOffset:700}).addTo(this._trip);
+      }
+      if(sh){
+        const sub=toPickup?"NEXT · TO":"TO · SHELTER";
+        L.marker(sh,{icon:this._pinIcon(VIOLET,"S",shelter&&shelter.name||"Shelter",sub),zIndexOffset:720}).addTo(this._trip);
+      }
+      if(!here){
+        const live=this.state.legs[legIndex];
+        here=(live&&live.coords&&live.coords.length>=2)?this._at(this._coords(live.coords),p):(drv||remaining[0]||kit||sh);
+      }
+      if(here){
+        const nm=winner&&winner.name||"Driver";
+        this._car=L.marker(here,{icon:this._carIcon(VEH[winner&&winner.vehicle_type]||"DRV",nm),zIndexOffset:1400}).addTo(this._trip);
       }
       const pts=[];
-      if(ok([restaurant.lat,restaurant.lng])) pts.push([+restaurant.lat,+restaurant.lng]);
-      if(ok([shelter.lat,shelter.lng])) pts.push([+shelter.lat,+shelter.lng]);
-      if(winner&&ok([winner.current_lat,winner.current_lng])) pts.push([+winner.current_lat,+winner.current_lng]);
-      if(pts.length>=2) this._map.fitBounds(L.latLngBounds(pts).pad(0.28));
+      if(kit) pts.push(kit);
+      if(sh) pts.push(sh);
+      if(here) pts.push(here);
+      remaining.forEach(c=>pts.push(c));
+      done.forEach(c=>pts.push(c));
+      if(!opts.keepView && pts.length){
+        const fit=()=>{
+          if(!this._map) return;
+          try{ this._map.invalidateSize(); }catch(e){}
+          try{
+            if(pts.length===1) this._map.setView(pts[0],15,{animate:false});
+            else{
+              const b=L.latLngBounds(pts);
+              if(b.isValid()) this._map.fitBounds(b.pad(0.45),{maxZoom:16,animate:false,padding:[40,40]});
+            }
+          }catch(e){}
+        };
+        fit();
+        this._later(fit,120);
+      }
     }catch(e){}
   }
 
   _km(a,b){
+    a=this._ll(a); b=this._ll(b);
+    if(!a||!b) return 0;
     const R=6371,dLat=(b[0]-a[0])*Math.PI/180,dLon=(b[1]-a[1])*Math.PI/180;
     const s=Math.sin(dLat/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
     return 2*R*Math.asin(Math.sqrt(s));
   }
-  _pathKm(c){ let t=0; for(let i=1;i<c.length;i++) t+=this._km(c[i-1],c[i]); return t; }
+  _pathKm(c){ c=this._coords(c); let t=0; for(let i=1;i<c.length;i++) t+=this._km(c[i-1],c[i]); return t; }
   _synth(a,b){
+    a=this._ll(a); b=this._ll(b);
+    if(!a||!b) return [];
     const n=26,out=[],mid=[(a[0]+b[0])/2,(a[1]+b[1])/2];
     const off=[(b[1]-a[1])*0.12,-(b[0]-a[0])*0.12];
     for(let i=0;i<=n;i++){
@@ -744,6 +870,8 @@ class Component extends DCLogic {
     return out;
   }
   async _route(a,b,vehicle){
+    a=this._ll(a); b=this._ll(b);
+    if(!a||!b){ const fb=this._synth(a,b); return {coords:fb,km:this._pathKm(fb),min:2,src:"estimated"}; }
     const url=`https://router.project-osrm.org/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson`;
     let coords=null, src="osrm";
     try{
@@ -757,8 +885,10 @@ class Component extends DCLogic {
     return {coords,km,min:Math.max(2,Math.round(km/(KMH[vehicle]||24)*60)),src};
   }
   _at(coords,t){
-    if(!coords||coords.length<2) return [55.9533,-3.1883];
+    coords=this._coords(coords);
+    if(coords.length<2) return coords[0]||null;
     const total=this._pathKm(coords), want=total*Math.max(0,Math.min(1,t));
+    if(total<=0) return coords[0];
     let acc=0;
     for(let i=1;i<coords.length;i++){
       const seg=this._km(coords[i-1],coords[i]);
@@ -769,6 +899,24 @@ class Component extends DCLogic {
       acc+=seg;
     }
     return coords[coords.length-1];
+  }
+  _rest(coords,t0,t1){
+    coords=this._coords(coords);
+    if(coords.length<2) return coords.slice();
+    const a=this._at(coords,t0), b=this._at(coords,t1);
+    if(!a||!b) return coords.slice();
+    const total=this._pathKm(coords);
+    const w0=total*Math.max(0,Math.min(1,t0)), w1=total*Math.max(0,Math.min(1,t1));
+    const out=[a];
+    let acc=0;
+    for(let i=1;i<coords.length;i++){
+      const next=acc+this._km(coords[i-1],coords[i]);
+      if(next>w0+1e-9 && acc<w1-1e-9) out.push(coords[i]);
+      acc=next;
+    }
+    const last=out[out.length-1];
+    if(!last||last[0]!==b[0]||last[1]!==b[1]) out.push(b);
+    return out;
   }
 
   _parse(text){
@@ -793,7 +941,7 @@ class Component extends DCLogic {
     });
     const r=this.state.restaurant;
     ok.sort((a,b)=>{
-      const da=this._km([r.lat,r.lng],[a.lat,a.lng]), db=this._km([r.lat,r.lng],[b.lat,b.lng]);
+      const da=this._km(r,a), db=this._km(r,b);
       return (b.demand_score-a.demand_score)*1.4+(da-db);
     });
     return ok[0]||this.state.shelters[0];
@@ -801,7 +949,7 @@ class Component extends DCLogic {
   _candidates(s){
     const r=this.state.restaurant;
     return this.state.drivers
-      .filter(d=>d.status==="available"&&d.current_lat&&d.max_capacity_kg>=s.weight)
+      .filter(d=>d.status==="available"&&this._ll(d)&&d.max_capacity_kg>=s.weight)
       .filter(d=>{
         const a=d.accepts||[];
         if(s.hot&&!(a.includes("hot")&&d.has_thermal_bag)) return false;
@@ -809,7 +957,7 @@ class Component extends DCLogic {
         if(s.meat&&!a.includes("meat")) return false;
         return true;
       })
-      .map(d=>({...d,distKm:this._km([r.lat,r.lng],[d.current_lat,d.current_lng])}))
+      .map(d=>({...d,distKm:this._km(r,d)}))
       .sort((a,b)=>a.distKm-b.distKm)
       .slice(0,3);
   }
@@ -834,7 +982,7 @@ class Component extends DCLogic {
 
     this._timers.forEach(clearTimeout); this._timers=[]; clearInterval(this._tick);
     this.setState({tab:"Live Tracking",phase:"thinking",steps:[],offers:[],winner:null,shelter:null,legs:[],legIndex:0,progress:0,activeRole:"manager"});
-    this._later(()=>this._map&&this._map.invalidateSize(),120);
+    this._later(()=>{ this._ensureMap(); if(this._map) this._map.invalidateSize(); },120);
 
     this._step("user → agent","Rescue request received",`"${foodText.trim()}"\nfrom ${restaurant.name}`,BRAND);
 
@@ -889,17 +1037,21 @@ class Component extends DCLogic {
     this._notify("Driver assigned",`${won.name} accepted and is heading to ${restaurant.name}.`,"manager",GREEN);
 
     let leg1, leg2;
+    const from=this._ll(won), kit=this._ll(restaurant), dest=this._ll(shelter);
     try{
-      leg1=await this._route([+won.current_lat,+won.current_lng],[+restaurant.lat,+restaurant.lng],won.vehicle_type);
-      leg2=await this._route([+restaurant.lat,+restaurant.lng],[+shelter.lat,+shelter.lng],won.vehicle_type);
+      this._ensureMap();
+      if(this._map) this._map.invalidateSize();
+      leg1=await this._route(from,kit,won.vehicle_type);
+      leg2=await this._route(kit,dest,won.vehicle_type);
     }catch(e){
-      leg1=this._route && null;
+      leg1=null; leg2=null;
     }
-    if(!leg1||!leg2){
-      const a=[+won.current_lat,+won.current_lng], b=[+restaurant.lat,+restaurant.lng], c=[+shelter.lat,+shelter.lng];
-      const s1=this._synth(a,b), s2=this._synth(b,c);
-      leg1={coords:s1,km:this._pathKm(s1),min:8,src:"estimated"};
-      leg2={coords:s2,km:this._pathKm(s2),min:10,src:"estimated"};
+    if(!leg1||!leg1.coords||leg1.coords.length<2||!leg2||!leg2.coords||leg2.coords.length<2){
+      const s1=this._synth(from,kit), s2=this._synth(kit,dest);
+      const fb1=s1.length>=2?s1:(from&&kit?[from,kit]:[]);
+      const fb2=s2.length>=2?s2:(kit&&dest?[kit,dest]:[]);
+      if(!leg1||!leg1.coords||leg1.coords.length<2) leg1={coords:fb1,km:this._pathKm(fb1),min:8,src:"estimated"};
+      if(!leg2||!leg2.coords||leg2.coords.length<2) leg2={coords:fb2,km:this._pathKm(fb2),min:10,src:"estimated"};
     }
     this.setState({legs:[leg1,leg2],routeSource:leg1.src||"estimated",legIndex:0,progress:0,phase:"to_pickup"},()=>{
       try{ this.paintIdle(); this.paintTrip(); this._startLeg(0); }catch(e){}
@@ -913,9 +1065,20 @@ class Component extends DCLogic {
     const leg=this.state.legs[i]; if(!leg) return;
     const dur=i===0?LEG1_MS:LEG2_MS, t0=Date.now();
     this.setState({legIndex:i,progress:0});
+    if(!this._car) { try{ this.paintTrip({keepView:true}); }catch(e){} }
     this._tick=setInterval(()=>{
       const p=Math.min(1,(Date.now()-t0)/dur);
-      if(this._car) this._car.setLatLng(this._at(leg.coords,p));
+      try{
+        const here=this._at(leg.coords,p);
+        if(here&&this._car) this._car.setLatLng(here);
+        else if(!this._car) this.paintTrip({keepView:true});
+        const rest=this._rest(leg.coords,p,1);
+        if(rest.length>=2){
+          if(this._remainHalo) this._remainHalo.setLatLngs(rest);
+          if(this._remainLine) this._remainLine.setLatLngs(rest);
+          if(this._remainCore) this._remainCore.setLatLngs(rest);
+        }
+      }catch(e){}
       if(!this._lastPush||Date.now()-this._lastPush>180){
         this._lastPush=Date.now();
         this.setState({progress:p,tickEta:Math.max(0,leg.min*(1-p)),tickDist:leg.km*(1-p)});
@@ -939,11 +1102,12 @@ class Component extends DCLogic {
   handover=()=>{
     if(this.state.phase!=="at_pickup") return;
     const {winner,shelter,safety}=this.state;
-    this.setState({phase:"to_shelter",activeRole:"driver"});
+    this.setState({phase:"to_shelter",activeRole:"driver"},()=>{
+      try{ this.paintTrip(); this._startLeg(1); }catch(e){}
+    });
     this._step("event · food_collected","Handover confirmed",
       `${safety.weight} kg loaded${winner.has_thermal_bag?" into thermal bag":""}\nFSA window: ${safety.windowMin} min remaining`,AMBER);
     this._notify("Food collected",`${winner.name} is en route to ${shelter.name}.`,"driver",GREEN);
-    this._startLeg(1);
   };
 
   _deliver(){
@@ -969,14 +1133,19 @@ class Component extends DCLogic {
     this._timers.forEach(clearTimeout); this._timers=[]; clearInterval(this._tick);
     this.setState(st=>({phase:"idle",steps:[],offers:[],winner:null,shelter:null,legs:[],legIndex:0,progress:0,
       routeSource:"standby",drivers:st.drivers.map(d=>({...d,status:d.status==="busy"?"available":d.status}))}),
-      ()=>{ if(this._trip) this._trip.clearLayers(); this.paintIdle();
+      ()=>{ this._car=null; this._remainHalo=this._remainLine=this._remainCore=null;
+        if(this._trip) this._trip.clearLayers(); this.paintIdle();
         if(this._map) this._map.setView([55.9490,-3.1900],12); });
   };
 
   renderVals(){
     const S=this.state, ph=S.phase;
     const go=t=>()=>{ this.setState(t==="Alerts"?{tab:t,unread:0}:{tab:t});
-      if(t==="Live Tracking") this._later(()=>this._map&&this._map.invalidateSize(),80); };
+      if(t==="Live Tracking") this._later(()=>{
+        this._ensureMap();
+        if(this._map) this._map.invalidateSize();
+        if(this.state.winner&&this.state.restaurant) this.paintTrip();
+      },80); };
     const stageIdx={idle:-1,thinking:-1,broadcast:0,routing:0,to_pickup:1,at_pickup:2,to_shelter:3,delivered:4}[ph];
     const leg=S.legs[S.legIndex];
     const avail=S.drivers.filter(d=>d.status==="available").length;
@@ -1002,16 +1171,17 @@ class Component extends DCLogic {
     })();
 
     const hud=(()=>{
-      if(ph==="idle") return {label:"Fleet standby",eta:avail,etaUnit:"drivers on shift",dist:`${S.drivers.length} plotted across Edinburgh`,pct:"0%"};
-      if(ph==="thinking"||ph==="broadcast") return {label:"Dispatching",eta:S.offers.length||"—",etaUnit:"offers open",dist:"Waiting for a driver to accept",pct:"6%"};
-      if(ph==="routing") return {label:"Building route",eta:"—",etaUnit:"",dist:"Resolving road geometry",pct:"12%"};
-      if(ph==="at_pickup") return {label:"At the kitchen",eta:"0",etaUnit:"min away",dist:`${w?w.name:"Driver"} is waiting for handover`,pct:"50%"};
-      if(ph==="delivered") return {label:"Delivered",eta:"✓",etaUnit:"",dist:"Route complete",pct:"100%"};
+      const fromTo=S.restaurant&&S.shelter?`FROM ${S.restaurant.name}  →  TO ${S.shelter.name}`:null;
+      if(ph==="idle") return {label:"Fleet standby",eta:avail,etaUnit:"drivers on shift",dist:`${S.drivers.length} plotted across Edinburgh`,pct:"0%",fromTo:null};
+      if(ph==="thinking"||ph==="broadcast") return {label:"Dispatching",eta:S.offers.length||"—",etaUnit:"offers open",dist:"Waiting for a driver to accept",pct:"6%",fromTo};
+      if(ph==="routing") return {label:"Building route",eta:"—",etaUnit:"",dist:"Resolving road geometry",pct:"12%",fromTo};
+      if(ph==="at_pickup") return {label:"At the kitchen",eta:"0",etaUnit:"min away",dist:`${w?w.name:"Driver"} is waiting for handover`,pct:"50%",fromTo};
+      if(ph==="delivered") return {label:"Delivered",eta:"✓",etaUnit:"",dist:"Route complete",pct:"100%",fromTo};
       const m=S.tickEta;
       return {label:S.legIndex===0?"ETA to pickup":"ETA to shelter",
         eta:m<1?"<1":Math.ceil(m),etaUnit:"min",
         dist:`${Number(S.tickDist||0).toFixed(1)} km remaining of ${leg&&leg.km!=null?Number(leg.km).toFixed(1):"—"} km`,
-        pct:`${Math.round((S.legIndex===0?S.progress*0.5:0.5+S.progress*0.5)*100)}%`};
+        pct:`${Math.round((S.legIndex===0?S.progress*0.5:0.5+S.progress*0.5)*100)}%`,fromTo};
     })();
 
     const mgrActive=S.activeRole==="manager"&&ph!=="idle";
