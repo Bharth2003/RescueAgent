@@ -304,10 +304,7 @@ input,textarea{font-family:inherit}
               </div>
               <div style="margin-top:6px;font-size:12px;color:#9BA3AE">{{ hud.dist }}</div>
               <sc-if value="{{ hud.fromTo }}">
-                <div style="margin-top:8px;font-size:11px;font-weight:600;color:#E9EBEE;line-height:1.45">
-                  <div>FROM · {{ hud.fromName }}</div>
-                  <div style="margin-top:3px">TO · {{ hud.toName }}</div>
-                </div>
+                <div style="margin-top:8px;font-size:11px;font-weight:600;color:#E9EBEE;line-height:1.45;white-space:normal">FROM&nbsp;{{ hud.fromName }}&nbsp;&rarr;&nbsp;TO&nbsp;{{ hud.toName }}</div>
               </sc-if>
               <div style="margin-top:10px;height:4px;border-radius:2px;background:#23272F;overflow:hidden">
                 <div style="height:100%;width:{{ hud.pct }};background:#FF7A2F;transition:width .14s linear"></div>
@@ -634,7 +631,12 @@ class Component extends DCLogic {
     basemap:"standard",
   };
   _timers=[];
-  _setMapHost=(el)=>{ if(!el) return; this._mapHost=el; if(window.L) this._ensureMap(); };
+  _setMapHost=(el)=>{
+    if(!el) return;
+    this._mapHost=el;
+    if(window.L) this._ensureMap();
+    if(this._map && this.state.winner){ try{ this._fitTrip(); }catch(e){} }
+  };
 
   componentDidMount(){
     Promise.all([
@@ -673,6 +675,18 @@ class Component extends DCLogic {
     this._mapEl=this._mapCanvas;
     return this._mapEl;
   }
+  _tripOn(){ return !!(this.state.winner&&(this.state.restaurant||this.state.shelter)); }
+  _fitTrip(){
+    const L=window.L, map=this._map;
+    if(!map||!L) return;
+    try{ map.invalidateSize(); }catch(e){}
+    const pts=[this._ll(this.state.winner),this._ll(this.state.restaurant),this._ll(this.state.shelter)].filter(Boolean);
+    if(!pts.length) return;
+    try{
+      map.fitBounds(L.latLngBounds(pts),{padding:[40,40],maxZoom:16,animate:false});
+      if(map.getZoom()<13) map.setView(L.latLngBounds(pts).getCenter(),14,{animate:false});
+    }catch(e){}
+  }
   _ensureMap(){
     if(!window.L||!this._mapHost) return null;
     this._bindMapCanvas();
@@ -685,12 +699,13 @@ class Component extends DCLogic {
       this._later(()=>{
         if(!this._map) return;
         try{ this._map.invalidateSize(); }catch(e){}
-        if(this.state.winner&&this.state.restaurant) this.paintTrip();
+        if(this._tripOn()) this.paintTrip();
       },80);
       return;
     }
     const L=window.L;
-    this._map=L.map(this._mapEl,{zoomControl:false,preferCanvas:true}).setView([55.9490,-3.1900],12);
+    this._map=L.map(this._mapEl,{zoomControl:false,preferCanvas:true});
+    if(!this._tripOn()) this._map.setView([55.9490,-3.1900],12);
     L.control.zoom({position:"bottomright"}).addTo(this._map);
     this._setTiles(this.state.basemap);
     this._fleet=L.layerGroup().addTo(this._map);
@@ -702,11 +717,12 @@ class Component extends DCLogic {
       }
     }catch(e){}
     this.paintIdle();
+    if(this._tripOn()) this.paintTrip();
     this._later(()=>{
       if(!this._map) return;
       try{ this._map.invalidateSize(); }catch(e){}
-      if(this.state.winner&&this.state.restaurant) this.paintTrip();
-    },300);
+      if(this._tripOn()) this.paintTrip();
+    },120);
   }
   _setTiles(kind){
     if(!this._map) return;
@@ -812,16 +828,21 @@ class Component extends DCLogic {
         else if(kit&&sh) remaining=[kit,sh];
         else if(drv&&sh) remaining=[drv,sh];
       }
+      if(remaining.length<2){
+        const fb=[drv,kit,sh].filter(Boolean);
+        if(fb.length>=2) remaining=fb;
+      }
       if(done.length>=2) L.polyline(done,{color:"#FFB489",weight:6,opacity:.45,lineJoin:"round"}).addTo(this._trip);
-      if(remaining.length>=2){
-        this._remainHalo=L.polyline(remaining,{color:"#0E1013",weight:16,opacity:.65,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
-        this._remainLine=L.polyline(remaining,{color:BRAND,weight:10,opacity:1,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
-        this._remainCore=L.polyline(remaining,{color:"#FFE0C2",weight:4,opacity:.95,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
+      const line=remaining.length>=2?remaining:(kit&&sh?[kit,sh]:(drv&&kit?[drv,kit]:(drv&&sh?[drv,sh]:[])));
+      if(line.length>=2){
+        this._remainHalo=L.polyline(line,{color:"#0E1013",weight:16,opacity:.65,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
+        this._remainLine=L.polyline(line,{color:"#ff6a00",weight:10,opacity:1,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
+        this._remainCore=L.polyline(line,{color:"#FFE0C2",weight:4,opacity:.95,lineJoin:"round",lineCap:"round"}).addTo(this._trip);
       }
       const tip={permanent:true,direction:"right",offset:[10,-2],opacity:1,className:"ra-tip"};
       if(kit){
         const kn=restaurant&&restaurant.name||"Kitchen";
-        L.circleMarker(kit,{radius:12,color:"#fff",weight:3,fillColor:BRAND,fillOpacity:1}).bindTooltip("FROM · "+kn,tip).addTo(this._trip);
+        L.circleMarker(kit,{radius:12,color:"#fff",weight:3,fillColor:"#ff6a00",fillOpacity:1}).bindTooltip("FROM · "+kn,tip).addTo(this._trip);
         L.marker(kit,{icon:this._pinIcon(BRAND,"P",kn,toShel?"FROM · PICKED UP":"FROM · PICKUP"),zIndexOffset:700}).addTo(this._trip);
       }
       if(sh){
@@ -835,34 +856,11 @@ class Component extends DCLogic {
       }
       if(here){
         const nm=winner&&winner.name||"Driver";
-        this._carDot=L.circleMarker(here,{radius:16,color:"#fff",weight:4,fillColor:BRAND,fillOpacity:1}).bindTooltip("LIVE · "+nm,{permanent:true,direction:"top",offset:[0,-12],opacity:1,className:"ra-tip"}).addTo(this._trip);
+        this._carDot=L.circleMarker(here,{radius:16,color:"#fff",weight:4,fillColor:"#ff6a00",fillOpacity:1}).bindTooltip("LIVE · "+nm,{permanent:true,direction:"top",offset:[0,-12],opacity:1,className:"ra-tip"}).addTo(this._trip);
         this._car=L.marker(here,{icon:this._carIcon(VEH[winner&&winner.vehicle_type]||"DRV",nm),zIndexOffset:1400}).addTo(this._trip);
       }
-      const pts=[];
-      if(kit) pts.push(kit);
-      if(sh) pts.push(sh);
-      if(here) pts.push(here);
-      remaining.forEach(c=>pts.push(c));
-      done.forEach(c=>pts.push(c));
-      const zoomedOut=!this._map||this._map.getZoom()<13;
-      if((!opts.keepView||zoomedOut) && pts.length){
-        const fit=()=>{
-          if(!this._map) return;
-          try{ this._map.invalidateSize(); }catch(e){}
-          try{
-            if(pts.length===1) this._map.setView(pts[0],15,{animate:false});
-            else{
-              const b=L.latLngBounds(pts);
-              if(b.isValid()) this._map.fitBounds(b.pad(0.28),{maxZoom:16,animate:false,padding:[56,56]});
-            }
-            if(this._map.getZoom()<13) this._map.setZoom(13,{animate:false});
-          }catch(e){}
-        };
-        fit();
-        this._later(fit,80);
-        this._later(fit,280);
-      }
-    }catch(e){}
+      this._fitTrip();
+    }catch(e){ try{ this._fitTrip(); }catch(e2){} }
   }
 
   _km(a,b){
@@ -1094,6 +1092,7 @@ class Component extends DCLogic {
           if(this._remainLine) this._remainLine.setLatLngs(rest);
           if(this._remainCore) this._remainCore.setLatLngs(rest);
         }
+        if(this._map && this._map.getZoom()<13) this._fitTrip();
       }catch(e){}
       if(!this._lastPush||Date.now()-this._lastPush>400){
         this._lastPush=Date.now();
