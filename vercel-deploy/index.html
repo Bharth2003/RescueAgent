@@ -706,20 +706,26 @@ class Component extends DCLogic {
     const L=window.L, {restaurant,shelter,legs,phase,winner}=this.state;
     this._trip.clearLayers(); this._car=null;
     if(!restaurant||!shelter) return;
-    if(legs[0]) L.polyline(legs[0].coords,{color:"#7A828D",weight:3.5,opacity:.8,dashArray:"7 8"}).addTo(this._trip);
-    if(legs[1]) L.polyline(legs[1].coords,{color:BRAND,weight:5,opacity:.95}).addTo(this._trip);
-    L.marker([restaurant.lat,restaurant.lng],{icon:this._sqIcon(BRAND,"P",phase==="at_pickup")})
-      .bindTooltip(restaurant.name,{direction:"top"}).addTo(this._trip);
-    L.marker([shelter.lat,shelter.lng],{icon:this._sqIcon(VIOLET,"S",phase==="delivered")})
-      .bindTooltip(shelter.name,{direction:"top"}).addTo(this._trip);
-    if(winner){
-      const start=legs[this.state.legIndex]?legs[this.state.legIndex].coords[0]:[winner.current_lat,winner.current_lng];
-      this._car=L.marker(start,{icon:this._carIcon(VEH[winner.vehicle_type]||"DRV"),zIndexOffset:900})
-        .bindTooltip(`${winner.name} · ${VEH[winner.vehicle_type]}`,{direction:"top"}).addTo(this._trip);
-    }
-    const pts=[[restaurant.lat,restaurant.lng],[shelter.lat,shelter.lng]];
-    if(winner) pts.push([winner.current_lat,winner.current_lng]);
-    this._map.fitBounds(L.latLngBounds(pts).pad(0.28));
+    try{
+      const ok=(p)=>p&&Number.isFinite(+p[0])&&Number.isFinite(+p[1]);
+      if(legs[0]&&legs[0].coords&&legs[0].coords.length>1) L.polyline(legs[0].coords,{color:"#7A828D",weight:3.5,opacity:.8,dashArray:"7 8"}).addTo(this._trip);
+      if(legs[1]&&legs[1].coords&&legs[1].coords.length>1) L.polyline(legs[1].coords,{color:BRAND,weight:5,opacity:.95}).addTo(this._trip);
+      if(ok([restaurant.lat,restaurant.lng])) L.marker([+restaurant.lat,+restaurant.lng],{icon:this._sqIcon(BRAND,"P",phase==="at_pickup")}).bindTooltip(restaurant.name||"Pickup",{direction:"top"}).addTo(this._trip);
+      if(ok([shelter.lat,shelter.lng])) L.marker([+shelter.lat,+shelter.lng],{icon:this._sqIcon(VIOLET,"S",phase==="delivered")}).bindTooltip(shelter.name||"Shelter",{direction:"top"}).addTo(this._trip);
+      if(winner){
+        const c0=legs[this.state.legIndex]&&legs[this.state.legIndex].coords&&legs[this.state.legIndex].coords[0];
+        const start=ok(c0)?c0:[winner.current_lat,winner.current_lng];
+        if(ok(start)){
+          this._car=L.marker(start,{icon:this._carIcon(VEH[winner.vehicle_type]||"DRV"),zIndexOffset:900})
+            .bindTooltip(`${winner.name||"Driver"} · ${VEH[winner.vehicle_type]||winner.vehicle_type||""}`,{direction:"top"}).addTo(this._trip);
+        }
+      }
+      const pts=[];
+      if(ok([restaurant.lat,restaurant.lng])) pts.push([+restaurant.lat,+restaurant.lng]);
+      if(ok([shelter.lat,shelter.lng])) pts.push([+shelter.lat,+shelter.lng]);
+      if(winner&&ok([winner.current_lat,winner.current_lng])) pts.push([+winner.current_lat,+winner.current_lng]);
+      if(pts.length>=2) this._map.fitBounds(L.latLngBounds(pts).pad(0.28));
+    }catch(e){}
   }
 
   _km(a,b){
@@ -751,6 +757,7 @@ class Component extends DCLogic {
     return {coords,km,min:Math.max(2,Math.round(km/(KMH[vehicle]||24)*60)),src};
   }
   _at(coords,t){
+    if(!coords||coords.length<2) return [55.9533,-3.1883];
     const total=this._pathKm(coords), want=total*Math.max(0,Math.min(1,t));
     let acc=0;
     for(let i=1;i<coords.length;i++){
@@ -868,9 +875,10 @@ class Component extends DCLogic {
   accept=(id)=>async()=>{
     if(this.state.phase!=="broadcast") return;
     clearTimeout(this._autoAccept);
-    const won=this.state.offers.find(o=>o.id===id);
+    const won=this.state.offers.find(o=>(o.id||o.driver_id)===id);
     if(!won) return;
     const {restaurant,shelter}=this.state;
+    if(!restaurant||!shelter) return;
 
     this.setState(st=>({
       offers:st.offers.map(o=>({...o,status:o.id===id?"won":"lost"})),
@@ -880,10 +888,21 @@ class Component extends DCLogic {
     this._step("driver → agent","Offer accepted",`${won.name} accepted in ${(Math.random()*3+1.4).toFixed(1)}s\nother 2 offers withdrawn`,GREEN);
     this._notify("Driver assigned",`${won.name} accepted and is heading to ${restaurant.name}.`,"manager",GREEN);
 
-    const leg1=await this._route([won.current_lat,won.current_lng],[restaurant.lat,restaurant.lng],won.vehicle_type);
-    const leg2=await this._route([restaurant.lat,restaurant.lng],[shelter.lat,shelter.lng],won.vehicle_type);
-    this.setState({legs:[leg1,leg2],routeSource:leg1.src,legIndex:0,progress:0,phase:"to_pickup"},()=>{
-      this.paintIdle(); this.paintTrip(); this._startLeg(0);
+    let leg1, leg2;
+    try{
+      leg1=await this._route([+won.current_lat,+won.current_lng],[+restaurant.lat,+restaurant.lng],won.vehicle_type);
+      leg2=await this._route([+restaurant.lat,+restaurant.lng],[+shelter.lat,+shelter.lng],won.vehicle_type);
+    }catch(e){
+      leg1=this._route && null;
+    }
+    if(!leg1||!leg2){
+      const a=[+won.current_lat,+won.current_lng], b=[+restaurant.lat,+restaurant.lng], c=[+shelter.lat,+shelter.lng];
+      const s1=this._synth(a,b), s2=this._synth(b,c);
+      leg1={coords:s1,km:this._pathKm(s1),min:8,src:"estimated"};
+      leg2={coords:s2,km:this._pathKm(s2),min:10,src:"estimated"};
+    }
+    this.setState({legs:[leg1,leg2],routeSource:leg1.src||"estimated",legIndex:0,progress:0,phase:"to_pickup"},()=>{
+      try{ this.paintIdle(); this.paintTrip(); this._startLeg(0); }catch(e){}
     });
     this._step("tool · route_lookup","Road route resolved",
       `leg 1 pickup: ${leg1.km.toFixed(1)} km · ~${leg1.min} min\nleg 2 delivery: ${leg2.km.toFixed(1)} km · ~${leg2.min} min\nsource: ${leg1.src==="osrm"?"OSRM live":"estimated fallback"}`,BRAND);
@@ -991,7 +1010,7 @@ class Component extends DCLogic {
       const m=S.tickEta;
       return {label:S.legIndex===0?"ETA to pickup":"ETA to shelter",
         eta:m<1?"<1":Math.ceil(m),etaUnit:"min",
-        dist:`${S.tickDist.toFixed(1)} km remaining of ${leg?leg.km.toFixed(1):"—"} km`,
+        dist:`${Number(S.tickDist||0).toFixed(1)} km remaining of ${leg&&leg.km!=null?Number(leg.km).toFixed(1):"—"} km`,
         pct:`${Math.round((S.legIndex===0?S.progress*0.5:0.5+S.progress*0.5)*100)}%`};
     })();
 
@@ -1096,7 +1115,7 @@ class Component extends DCLogic {
         showOffers:ph==="broadcast"||null,
         showAssigned:["routing","to_pickup","at_pickup","to_shelter","delivered"].includes(ph)||null,
         offerHint:"Tap Accept on any driver, or wait — the nearest one takes it automatically.",
-        initials:w?w.name.split(" ").map(x=>x[0]).join("").slice(0,2):"",
+        initials:w&&w.name?String(w.name).split(" ").map(x=>x[0]||"").join("").slice(0,2):"",
         name:w?w.name:"", rating:w?w.rating:"",
         meta:w?`${VEH[w.vehicle_type]||w.vehicle_type} · ${w.vehicle_reg} · ${w.neighbourhood} · ${w.max_capacity_kg} kg${w.has_thermal_bag?" · thermal bag":""}`:"",
         instruction:drvText[0], detail:drvText[1],
@@ -1104,12 +1123,12 @@ class Component extends DCLogic {
         actionLabel:ph==="at_pickup"?"Confirm food collected":"Report arrival early",
         action:ph==="at_pickup"?this.handover:()=>{ clearInterval(this._tick); this.setState({progress:1},()=>this._arrivePickup()); }},
       offers:S.offers.map(o=>({name:o.name,vehicle:VEH[o.vehicle_type]||o.vehicle_type,
-        meta:`${o.distKm.toFixed(1)} km away · ${o.max_capacity_kg} kg · ${o.neighbourhood} · ${o.rating}★`,
+        meta:`${Number(o.distKm||0).toFixed(1)} km away · ${o.max_capacity_kg} kg · ${o.neighbourhood} · ${o.rating}★`,
         border:o.status==="won"?"#1F4A3A":o.status==="lost"?LINE:"#2A303A",
         bg:o.status==="won"?"#101F1A":o.status==="lost"?"#141720":"#12151A",
         pending:o.status==="pending"?true:null, settled:o.status!=="pending"?true:null,
         settledLabel:o.status==="won"?"ACCEPTED":"TAKEN", settledColor:o.status==="won"?GREEN:"#5B626C",
-        accept:this.accept(o.id)})),
+        accept:this.accept(o.id||o.driver_id)})),
 
       hasActive:["to_pickup","at_pickup","to_shelter"].includes(ph)||null,
       noActive:["to_pickup","at_pickup","to_shelter"].includes(ph)?null:true,
@@ -1127,7 +1146,7 @@ class Component extends DCLogic {
       shelterList:shelterRows.map(s=>{ const pct=s.capacity_meals?Math.round(s.current_intake_meals/s.capacity_meals*100):0;
         return {name:s.name,address:s.address,demand:`${s.demand_score}/5`,
           demandColor:s.demand_score>=4.5?RED:s.demand_score>=4?AMBER:GREEN,
-          tags:(s.dietary_tags||[]).map(t=>t.replace(/_/g," ")),
+          tags:(s.dietary_tags||[]).map(t=>String(t).replace(/_/g," ")),
           hours:`${s.opens_24h}–${s.closes_24h}`,cap:`${s.current_intake_meals}/${s.capacity_meals} meals`,pct:`${pct}%`};}),
 
       driverShown:driverRows.length,
