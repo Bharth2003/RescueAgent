@@ -633,6 +633,12 @@ class Component extends DCLogic {
       fetch("data/restaurants.json").then(r=>r.json()),
       fetch("data/safety_rules.json").then(r=>r.json()),
     ]).then(([drivers,shelters,restaurants,rules])=>{
+      restaurants=(restaurants||[]).map(r=>{
+        let c=r.cuisine;
+        if(Array.isArray(c)) c=c.filter(Boolean).join(", ");
+        if(c==null) c="";
+        return Object.assign({}, r, {cuisine:String(c)});
+      });
       this.setState({drivers,shelters,restaurants,rules},()=>this.paintIdle());
     }).catch(()=>{});
     this._waitL();
@@ -1059,7 +1065,7 @@ class Component extends DCLogic {
       searchTotal:ql?`${allMatches.length} of ${S.restaurants.length} · showing ${Math.min(60,allMatches.length)}`
                     :`${S.restaurants.length} in the OSM set`,
       restResults:allMatches.slice(0,60).map(r=>({name:r.name,address:r.address,
-        cuisine:r.cuisine?r.cuisine.replace(/_/g," "):null,
+        cuisine:(function(c){if(Array.isArray(c))c=c[0]||"";c=c==null?"":String(c);return c?c.replace(/_/g," "):null;})(r.cuisine),
         km:`${this._km(centre,[r.lat,r.lng]).toFixed(1)} km`,
         pick:()=>this.setState({restaurant:r,q:""})})),
 
